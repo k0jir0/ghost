@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ghost.context import BackendType, ContextManager, ModelState
+from ghost.health_monitor import HealthIssue, ResourceSnapshot
 from ghost.training import TrainingConfig, TrainingPipeline, TrainingResult
 
 
@@ -30,6 +31,28 @@ def _mock_ops(losses: list[float] | None = None) -> MagicMock:
     ops.train_step = AsyncMock(side_effect=results + [{"status": "success", "loss": losses[-1]}] * 1000)
     ops.save_checkpoint = AsyncMock(return_value={"status": "success", "path": "/tmp/ckpt.pt"})
     return ops
+
+
+class StubHealthMonitor:
+    def __init__(self, snapshot: ResourceSnapshot):
+        self.snapshot = snapshot
+
+    def check_resources(self) -> ResourceSnapshot:
+        return self.snapshot
+
+    def recommended_batch_size(
+        self,
+        current_batch_size: int,
+        snapshot: ResourceSnapshot | None = None,
+    ) -> int:
+        active_snapshot = snapshot or self.snapshot
+        has_memory_pressure = any(
+            issue.code in {"system-memory-high", "gpu-memory-high"}
+            for issue in active_snapshot.issues
+        )
+        if has_memory_pressure and current_batch_size > 1:
+            return max(1, current_batch_size // 2)
+        return current_batch_size
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +117,7 @@ class TestTrainingPipelineLoop:
             checkpoint_interval=2,
         )
 
-        with patch("ghost.training.PyTorchOps", return_value=ops):
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
             result = self._run(pipeline, cfg)
 
         assert result.success is True
@@ -117,7 +140,7 @@ class TestTrainingPipelineLoop:
             early_stopping_patience=2,
         )
 
-        with patch("ghost.training.PyTorchOps", return_value=ops):
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
             result = self._run(pipeline, cfg)
 
         # Should stop early, not run all 20 epochs
@@ -139,7 +162,7 @@ class TestTrainingPipelineLoop:
             checkpoint_interval=2,
         )
 
-        with patch("ghost.training.PyTorchOps", return_value=ops):
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
             self._run(pipeline, cfg)
 
         # save_checkpoint should have been called for epochs 2 and 4
@@ -162,7 +185,7 @@ class TestTrainingPipelineLoop:
             early_stopping_patience=3,
         )
 
-        with patch("ghost.training.PyTorchOps", return_value=ops):
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
             result = self._run(pipeline, cfg)
 
         assert result.epochs_completed == 5
@@ -197,3 +220,45 @@ class TestTrainingPipelineLoop:
         cm = ContextManager(storage_path=tmp_data_dir)
         pipeline = TrainingPipeline(context_manager=cm)
         assert pipeline.is_training("inactive") is False
+
+    def test_degraded_health_reduces_batch_size(self, tmp_data_dir: Path) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        cm.create_context("pressure", "Pressure", BackendType.PYTORCH)
+
+        snapshot = ResourceSnapshot(
+            status="degraded",
+            checked_at="2026-04-06T00:00:00",
+            system_memory_ratio=0.95,
+            gpu_memory_ratio=None,
+            model_cache_size_bytes=0,
+            data_cache_size_bytes=0,
+            issues=[
+                HealthIssue(
+                    severity="degraded",
+                    code="system-memory-high",
+                    message="System memory usage exceeded the configured threshold.",
+                )
+            ],
+        )
+
+        pipeline = TrainingPipeline(
+            context_manager=cm,
+            health_monitor=StubHealthMonitor(snapshot),
+        )
+        ops = _mock_ops([0.5] * 10)
+
+        cfg = TrainingConfig(
+            model_id="pressure",
+            backend=BackendType.PYTORCH,
+            epochs=1,
+            steps_per_epoch=1,
+            batch_size=64,
+        )
+
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
+            result = self._run(pipeline, cfg)
+
+        assert result.success is True
+        assert result.effective_batch_size == 32
+        assert result.health_status == "degraded"
+        assert ops.train_step.await_args_list[0].kwargs["batch_size"] == 32

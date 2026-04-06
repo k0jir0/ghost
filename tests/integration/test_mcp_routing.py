@@ -22,6 +22,7 @@ def _make_server(tmp_data_dir: Path) -> Any:
     pytorch_ops = MagicMock()
     tensorflow_ops = MagicMock()
     ollama_client = MagicMock()
+    health_monitor = MagicMock()
 
     pytorch_ops.create_model = AsyncMock(
         return_value={"status": "success", "model_id": "m1", "num_parameters": 1000}
@@ -58,6 +59,12 @@ def _make_server(tmp_data_dir: Path) -> Any:
     ollama_client.get_recommendation = AsyncMock(
         return_value={"status": "success", "recommendations": {"architecture": "mlp"}}
     )
+    health_monitor.get_health_report.return_value = {
+        "status": "healthy",
+        "issues": [],
+        "system_memory_ratio": 0.42,
+        "gpu_memory_ratio": None,
+    }
 
     with (
         patch("ghost.mcp_server.PyTorchOps", return_value=pytorch_ops),
@@ -67,13 +74,18 @@ def _make_server(tmp_data_dir: Path) -> Any:
     ):
         from ghost.mcp_server import GhostMCPServer
 
-        server = GhostMCPServer(context_manager=cm, ollama_client=ollama_client)
+        server = GhostMCPServer(
+            context_manager=cm,
+            ollama_client=ollama_client,
+            health_monitor=health_monitor,
+        )
         # Inject mocked ops directly
         server.pytorch_ops = pytorch_ops
         server.tensorflow_ops = tensorflow_ops
         server.ollama_client = ollama_client
+        server.health_monitor = health_monitor
 
-    return server, cm, pytorch_ops, tensorflow_ops, ollama_client
+    return server, cm, pytorch_ops, tensorflow_ops, ollama_client, health_monitor
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +213,13 @@ class TestContextTools:
         assert result.get("status") == "success"
 
     @pytest.mark.asyncio
+    async def test_get_system_health(self, tmp_data_dir: Path) -> None:
+        server, *_, health_monitor = _make_server(tmp_data_dir)
+        result = await server._handle_tool("get_system_health", {})
+        assert result.get("status") == "healthy"
+        health_monitor.get_health_report.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self, tmp_data_dir: Path) -> None:
         server, *_ = _make_server(tmp_data_dir)
         result = await server._handle_tool("nonexistent_tool", {})
@@ -297,4 +316,8 @@ class TestPydanticValidation:
 
     def test_list_models_accepts_empty_args(self) -> None:
         exc = self._validate("list_models", {})
+        assert exc is None
+
+    def test_get_system_health_accepts_empty_args(self) -> None:
+        exc = self._validate("get_system_health", {})
         assert exc is None

@@ -20,6 +20,7 @@ from mcp.types import (
 from pydantic import BaseModel, Field, ValidationError
 
 from ghost.context import ContextManager, BackendType, ModelState
+from ghost.health_monitor import HealthMonitor
 from ghost.pytorch_ops import PyTorchOps
 from ghost.tensorflow_ops import TensorFlowOps
 from ghost.ollama_client import OllamaClient
@@ -75,6 +76,10 @@ class ListModelsArgs(BaseModel):
     pass
 
 
+class GetSystemHealthArgs(BaseModel):
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Tool → argument model registry
 # ---------------------------------------------------------------------------
@@ -92,6 +97,7 @@ _TOOL_ARG_MODELS: dict[str, type[BaseModel]] = {
     "tensorflow_load_checkpoint": LoadCheckpointArgs,
     "get_training_status": GetTrainingStatusArgs,
     "list_models": ListModelsArgs,
+    "get_system_health": GetSystemHealthArgs,
     "get_model_recommendation": GetModelRecommendationArgs,
 }
 
@@ -106,11 +112,13 @@ class GhostMCPServer:
         self,
         context_manager: ContextManager | None = None,
         ollama_client: OllamaClient | None = None,
+        health_monitor: HealthMonitor | None = None,
     ):
         """Initialize the MCP server."""
         self.server = Server("ghost-mcp")
         self.context_manager = context_manager or ContextManager()
         self.ollama_client = ollama_client or OllamaClient()
+        self.health_monitor = health_monitor or HealthMonitor()
         self.pytorch_ops = PyTorchOps(self.context_manager)
         self.tensorflow_ops = TensorFlowOps(self.context_manager)
 
@@ -284,6 +292,11 @@ class GhostMCPServer:
                         inputSchema={"type": "object", "properties": {}},
                     ),
                     Tool(
+                        name="get_system_health",
+                        description="Inspect resource health, thresholds, and cache usage",
+                        inputSchema={"type": "object", "properties": {}},
+                    ),
+                    Tool(
                         name="get_model_recommendation",
                         description="Get Ollama-powered model training recommendations",
                         inputSchema={
@@ -423,6 +436,9 @@ class GhostMCPServer:
                     for ctx in contexts
                 ]
             }
+
+        if name == "get_system_health":
+            return self.health_monitor.get_health_report()
 
         if name == "get_model_recommendation":
             return await self.ollama_client.get_recommendation(

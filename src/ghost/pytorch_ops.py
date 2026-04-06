@@ -288,7 +288,13 @@ class PyTorchOps:
             if not checkpoint_path.exists():
                 return {"status": "error", "message": "Checkpoint not found"}
             
-            checkpoint = torch.load(checkpoint_path, map_location=self._device)
+            # weights_only=True prevents arbitrary code execution from
+            # malicious checkpoint files (CVE-style torch.load risk).
+            checkpoint = torch.load(
+                checkpoint_path,
+                map_location=self._device,
+                weights_only=True,
+            )
             
             if model_id not in self.models:
                 # Need to recreate architecture first

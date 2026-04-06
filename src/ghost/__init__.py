@@ -8,10 +8,12 @@ __author__ = "McGill Software"
 
 from ghost.config import GhostConfig
 from ghost.context import ModelContext
+from ghost.health_monitor import HealthMonitor
 from ghost.training import TrainingPipeline
 
 __all__ = [
     "GhostConfig",
+    "HealthMonitor",
     "ModelContext",
     "TrainingPipeline",
     "__version__",

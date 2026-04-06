@@ -71,15 +71,34 @@ class ModelContext:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         data = asdict(self)
+        data["backend"] = self.backend.value
+        data["state"] = self.state.value
         data["checkpoint_path"] = str(self.checkpoint_path) if self.checkpoint_path else None
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModelContext:
         """Create from dictionary."""
-        if data.get("checkpoint_path"):
-            data["checkpoint_path"] = Path(data["checkpoint_path"])
-        return cls(**data)
+        payload = dict(data)
+
+        if payload.get("checkpoint_path"):
+            payload["checkpoint_path"] = Path(payload["checkpoint_path"])
+
+        backend = payload.get("backend")
+        if isinstance(backend, str):
+            payload["backend"] = BackendType(backend)
+
+        state = payload.get("state")
+        if isinstance(state, str):
+            payload["state"] = ModelState(state)
+
+        metrics = payload.get("metrics", [])
+        payload["metrics"] = [
+            metric if isinstance(metric, TrainingMetrics) else TrainingMetrics(**metric)
+            for metric in metrics
+        ]
+
+        return cls(**payload)
 
 
 class ContextManager:
@@ -102,7 +121,14 @@ class ContextManager:
                 data = json.loads(ctx_file.read_text())
                 ctx = ModelContext.from_dict(data)
                 self._contexts[ctx.model_id] = ctx
-            except Exception:
+            except Exception as exc:
+                # Log corrupt/incompatible context files so they're visible
+                # in the log stream rather than silently disappearing.
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "Skipping corrupt context file %s: %s", ctx_file.name, exc
+                )
                 continue
 
     def create_context(
