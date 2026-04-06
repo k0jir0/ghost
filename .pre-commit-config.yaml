@@ -1,0 +1,72 @@
+---
+# Shift-left quality gates — run on every commit before code is pushed.
+#
+# Install once:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually against all files:
+#   pre-commit run --all-files
+
+repos:
+  # ── Ruff: fast linter + formatter (replaces flake8, isort, black) ────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        name: ruff lint
+        args: [--fix]
+      - id: ruff-format
+        name: ruff format
+
+  # ── mypy: static type checker ────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        name: mypy type check
+        args:
+          - --ignore-missing-imports
+          - --strict
+        files: ^src/ghost/
+        additional_dependencies:
+          - pydantic>=2.0.0
+          - pydantic-settings>=2.0.0
+
+  # ── Bandit: Python security linter ───────────────────────────────────────
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        name: bandit security scan
+        args:
+          - --recursive
+          - --severity-level=medium   # fail on medium+ severity
+          - --confidence-level=medium
+          - -x
+          - tests/               # exclude test stubs from security scan
+        files: ^src/|^agents/
+
+  # ── detect-secrets: block accidental credential commits ──────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        name: detect secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: (\.env\.example|tests/)
+
+  # ── Built-in pre-commit hooks ─────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]        # block accidental model weight commits
+      - id: debug-statements       # catch leftover breakpoint() / pdb calls
+      - id: no-commit-to-branch
+        args: [--branch, main]     # force PRs into main

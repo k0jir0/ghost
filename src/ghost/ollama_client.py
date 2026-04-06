@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import asyncio
+
 import ollama
 
 from ghost.config import get_config
@@ -32,31 +34,46 @@ class OllamaClient:
         logger.info("ollama_client_init", host=self.host, model=self.model)
 
     def chat(self, message: str, system: str | None = None) -> str:
-        """Send a chat message to Ollama.
-        
+        """Send a chat message to Ollama (synchronous).
+
         Args:
             message: User message
             system: Optional system prompt
-        
+
         Returns:
             LLM response text
         """
         try:
-            messages = []
+            messages: list[dict[str, str]] = []
             if system:
                 messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": message})
-            
+
             response = ollama.chat(
                 model=self.model,
                 messages=messages,
-                options={"timeout": self.timeout}
+                options={"timeout": self.timeout},
             )
-            
-            return response["message"]["content"]
+
+            return response["message"]["content"]  # type: ignore[index]
         except Exception as e:
             logger.error("ollama_chat_error", error=str(e))
             return f"Error: {str(e)}"
+
+    async def chat_async(self, message: str, system: str | None = None) -> str:
+        """Send a chat message to Ollama without blocking the event loop.
+
+        Wraps the synchronous :meth:`chat` in :func:`asyncio.to_thread` so it
+        is safe to ``await`` from async code.
+
+        Args:
+            message: User message
+            system: Optional system prompt
+
+        Returns:
+            LLM response text
+        """
+        return await asyncio.to_thread(self.chat, message, system)
 
     async def get_recommendation(
         self,
@@ -64,26 +81,30 @@ class OllamaClient:
         dataset: str = "",
     ) -> dict[str, Any]:
         """Get model training recommendations from Ollama.
-        
+
         Args:
             task: Training task description
             dataset: Dataset description
-        
+
         Returns:
             Recommendation dictionary
         """
         try:
-            system_prompt = """You are an expert ML training assistant. Based on the training task and dataset, 
-provide recommendations for model architecture, hyperparameters, and training strategy. 
-Respond in JSON format with keys: architecture, learning_rate, batch_size, epochs, 
-optimizer, and tips (array of strings)."""
+            system_prompt = (
+                "You are an expert ML training assistant. Based on the training task"
+                " and dataset, provide recommendations for model architecture,"
+                " hyperparameters, and training strategy. Respond in JSON format with"
+                " keys: architecture, learning_rate, batch_size, epochs, optimizer,"
+                " and tips (array of strings)."
+            )
 
-            user_prompt = f"""Training Task: {task}
-Dataset: {dataset if dataset else 'Not specified'}
+            user_prompt = (
+                f"Training Task: {task}\n"
+                f"Dataset: {dataset if dataset else 'Not specified'}\n\n"
+                "Provide recommendations for training this model."
+            )
 
-Provide recommendations for training this model."""
-
-            response = self.chat(user_prompt, system=system_prompt)
+            response = await self.chat_async(user_prompt, system=system_prompt)
             
             # Try to parse as JSON
             try:
@@ -114,30 +135,35 @@ Provide recommendations for training this model."""
         metrics: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Analyze training progress and provide suggestions.
-        
+
         Args:
             metrics: List of training metrics
-        
+
         Returns:
             Analysis and suggestions
         """
         try:
-            metrics_summary = "\n".join([
-                f"Step {m.get('step', i)}: loss={m.get('loss', 'N/A')}, "
-                f"accuracy={m.get('accuracy', 'N/A')}"
-                for i, m in enumerate(metrics[-10:])
-            ])
-            
-            system_prompt = """You are an expert ML training assistant. Analyze the training progress 
-and provide actionable suggestions. Respond in JSON format with keys: status 
-(good/warning/concerning), analysis, and suggestions (array of strings)."""
+            metrics_summary = "\n".join(
+                [
+                    f"Step {m.get('step', i)}: loss={m.get('loss', 'N/A')}, "
+                    f"accuracy={m.get('accuracy', 'N/A')}"
+                    for i, m in enumerate(metrics[-10:])
+                ]
+            )
 
-            user_prompt = f"""Recent training metrics:
-{metrics_summary}
+            system_prompt = (
+                "You are an expert ML training assistant. Analyze the training"
+                " progress and provide actionable suggestions. Respond in JSON format"
+                " with keys: status (good/warning/concerning), analysis, and"
+                " suggestions (array of strings)."
+            )
 
-Provide analysis and suggestions for improving training."""
+            user_prompt = (
+                f"Recent training metrics:\n{metrics_summary}\n\n"
+                "Provide analysis and suggestions for improving training."
+            )
 
-            response = self.chat(user_prompt, system=system_prompt)
+            response = await self.chat_async(user_prompt, system=system_prompt)
             
             try:
                 import json
