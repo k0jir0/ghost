@@ -7,57 +7,20 @@ Similar to Hephaestus agent pattern.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-import re
 from typing import Any
 
 from ghost.config import get_config
 from ghost.context import ContextManager, BackendType
+from ghost.planning import PlanningRequest, TrainingPlan, TrainingPlanner
 from ghost.pytorch_ops import PyTorchOps
 from ghost.tensorflow_ops import TensorFlowOps
-from ghost.training import TrainingPipeline, TrainingConfig
+from ghost.training import TrainingPipeline
 from ghost.ollama_client import OllamaClient
 from ghost.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
-
-_SUPPORTED_ARCHITECTURES = {"mlp", "resnet18", "resnet50", "custom"}
-
-
-@dataclass
-class TrainingTaskPlan:
-    """Structured execution plan for a training task."""
-
-    task: str
-    backend: BackendType
-    architecture: str
-    num_classes: int
-    batch_size: int
-    learning_rate: float
-    epochs: int
-    dataset: str = ""
-    optimizer: str | None = None
-    recommendation_source: str = "defaults"
-    tips: list[str] = field(default_factory=list)
-    raw_recommendations: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "task": self.task,
-            "backend": self.backend.value,
-            "architecture": self.architecture,
-            "num_classes": self.num_classes,
-            "batch_size": self.batch_size,
-            "learning_rate": self.learning_rate,
-            "epochs": self.epochs,
-            "dataset": self.dataset,
-            "optimizer": self.optimizer,
-            "recommendation_source": self.recommendation_source,
-            "tips": self.tips,
-            "raw_recommendations": self.raw_recommendations,
-        }
 
 
 class TrainingAgent:
@@ -89,11 +52,15 @@ class TrainingAgent:
             },
         )
         self.ollama_client = OllamaClient()
+        self.planner = TrainingPlanner(
+            config=self.config,
+            ollama_client=self.ollama_client,
+        )
 
         self._running = False
         self._iteration_count = 0
         self._last_task: str | None = None
-        self._last_plan: TrainingTaskPlan | None = None
+        self._last_plan: TrainingPlan | None = None
         self._last_analysis: dict[str, Any] | None = None
         self._last_mtime: float | None = None
 
@@ -178,131 +145,6 @@ This agent watches TASKS.md and executes training tasks autonomously.
         except Exception as e:
             logger.warning("memory_save_failed", error=str(e))
 
-    def _extract_recommendation_payload(
-        self,
-        recommendations: dict[str, Any],
-    ) -> dict[str, Any]:
-        payload = recommendations.get("recommendations")
-        return payload if isinstance(payload, dict) else {}
-
-    def _infer_dataset(self, task_text: str) -> str:
-        match = re.search(r"\bon\s+([^,]+)", task_text, flags=re.IGNORECASE)
-        if not match:
-            return ""
-        return match.group(1).strip()
-
-    def _coerce_positive_int(
-        self,
-        value: Any,
-        default: int,
-        *,
-        minimum: int = 1,
-        maximum: int = 4096,
-    ) -> int:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-
-        if parsed < minimum:
-            return default
-        return min(parsed, maximum)
-
-    def _coerce_positive_float(
-        self,
-        value: Any,
-        default: float,
-        *,
-        minimum: float = 1.0e-6,
-        maximum: float = 10.0,
-    ) -> float:
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError):
-            return default
-
-        if parsed < minimum:
-            return default
-        return min(parsed, maximum)
-
-    def _select_backend(self, task_text: str, recommendations: dict[str, Any]) -> BackendType:
-        task_lower = task_text.lower()
-        if "tensorflow" in task_lower or "keras" in task_lower:
-            return BackendType.TENSORFLOW
-
-        recommended_backend = str(recommendations.get("backend", "")).lower()
-        if "tensorflow" in recommended_backend or "keras" in recommended_backend:
-            return BackendType.TENSORFLOW
-        if "pytorch" in recommended_backend or "torch" in recommended_backend:
-            return BackendType.PYTORCH
-
-        configured_backend = self.config.get_backend()
-        return (
-            BackendType.PYTORCH
-            if configured_backend == "pytorch"
-            else BackendType.TENSORFLOW
-        )
-
-    def _infer_architecture(
-        self,
-        task_text: str,
-        recommendations: dict[str, Any],
-    ) -> str:
-        recommended = str(recommendations.get("architecture", "")).lower().strip()
-        if recommended in _SUPPORTED_ARCHITECTURES:
-            return recommended
-
-        task_lower = task_text.lower()
-        keyword_map = {
-            "resnet50": "resnet50",
-            "resnet18": "resnet18",
-            "mlp": "mlp",
-            "bert": "custom",
-            "transformer": "custom",
-            "lstm": "custom",
-        }
-        for keyword, architecture in keyword_map.items():
-            if keyword in task_lower:
-                return architecture
-
-        return "mlp"
-
-    def _build_plan(
-        self,
-        task_text: str,
-        recommendations: dict[str, Any],
-    ) -> TrainingTaskPlan:
-        payload = self._extract_recommendation_payload(recommendations)
-        recommendation_source = "ollama" if payload else "defaults"
-        tips = payload.get("tips", [])
-        if not isinstance(tips, list):
-            tips = []
-
-        return TrainingTaskPlan(
-            task=task_text,
-            backend=self._select_backend(task_text, payload),
-            architecture=self._infer_architecture(task_text, payload),
-            num_classes=self._coerce_positive_int(payload.get("num_classes"), 10, maximum=10_000),
-            batch_size=self._coerce_positive_int(
-                payload.get("batch_size"),
-                self.config.default_batch_size,
-            ),
-            learning_rate=self._coerce_positive_float(
-                payload.get("learning_rate"),
-                self.config.default_learning_rate,
-            ),
-            epochs=self._coerce_positive_int(
-                payload.get("epochs"),
-                self.config.default_epochs,
-                maximum=self.config.max_iterations,
-            ),
-            dataset=self._infer_dataset(task_text),
-            optimizer=str(payload.get("optimizer")) if payload.get("optimizer") else None,
-            recommendation_source=recommendation_source,
-            tips=[str(item) for item in tips],
-            raw_recommendations=payload,
-        )
-
     def parse_tasks(self) -> list[dict[str, Any]]:
         """Parse TASKS.md and extract pending task queue.
 
@@ -377,7 +219,12 @@ This agent watches TASKS.md and executes training tasks autonomously.
             recommendations = await self.ollama_client.get_recommendation(
                 task=task_text,
             )
-            plan = self._build_plan(task_text, recommendations)
+            plan = await self.planner.create_plan(
+                PlanningRequest(
+                    task=task_text,
+                    recommendations=recommendations,
+                )
+            )
 
             if recommendations.get("status") == "success":
                 logger.info(
@@ -437,12 +284,8 @@ This agent watches TASKS.md and executes training tasks autonomously.
                 self.context_manager.update_context(ctx)
 
             # Build training config from global config defaults
-            config = TrainingConfig(
+            config = plan.to_training_config(
                 model_id=model_id,
-                backend=backend,
-                epochs=plan.epochs,
-                batch_size=plan.batch_size,
-                learning_rate=plan.learning_rate,
                 checkpoint_interval=self.config.checkpoint_interval,
             )
 

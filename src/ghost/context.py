@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 class ModelState(Enum):
@@ -38,7 +42,7 @@ class TrainingMetrics:
     loss: float
     accuracy: float | None = None
     learning_rate: float | None = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=_utc_now_iso)
 
 
 @dataclass
@@ -55,19 +59,19 @@ class ModelContext:
     checkpoint_path: Path | None = None
     config: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=_utc_now_iso)
+    updated_at: str = field(default_factory=_utc_now_iso)
 
     def update_state(self, state: ModelState) -> None:
         """Update model state."""
         self.state = state
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = _utc_now_iso()
 
     def add_metric(self, metric: TrainingMetrics) -> None:
         """Add a training metric."""
         self.metrics.append(metric)
         self.current_step = metric.step
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = _utc_now_iso()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -160,7 +164,7 @@ class ContextManager:
 
     def update_context(self, ctx: ModelContext) -> None:
         """Update a model context and persist."""
-        ctx.updated_at = datetime.utcnow().isoformat()
+        ctx.updated_at = _utc_now_iso()
         self._contexts[ctx.model_id] = ctx
         self._save_context(ctx)
 

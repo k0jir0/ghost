@@ -7,7 +7,7 @@ training pipeline and MCP layer can react before the process destabilizes.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 import time
 from typing import Any, Literal
@@ -25,6 +25,10 @@ except ImportError:  # pragma: no cover - exercised when torch is absent
     torch = None
 
 HealthStatus = Literal["healthy", "warning", "degraded"]
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -121,7 +125,7 @@ class HealthMonitor:
 
         snapshot = ResourceSnapshot(
             status=self._derive_status(issues),
-            checked_at=datetime.utcnow().isoformat(),
+            checked_at=_utc_now_iso(),
             system_memory_ratio=system_memory_ratio,
             gpu_memory_ratio=gpu_memory_ratio,
             model_cache_size_bytes=self._directory_size(self.config.model_cache_dir),

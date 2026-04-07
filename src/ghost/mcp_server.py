@@ -7,7 +7,7 @@ so malformed inputs surface as structured errors rather than deep stack traces.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -17,7 +17,7 @@ from mcp.types import (
     CallToolResult,
     ListToolsResult,
 )
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from ghost.context import ContextManager, BackendType, ModelState
 from ghost.health_monitor import HealthMonitor
@@ -25,86 +25,14 @@ from ghost.pytorch_ops import PyTorchOps
 from ghost.tensorflow_ops import TensorFlowOps
 from ghost.ollama_client import OllamaClient
 from ghost.logging import get_logger
+from ghost.tool_catalog import ToolCatalog, ToolSpec
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Pydantic argument models — shift-left validation at the MCP boundary
-# ---------------------------------------------------------------------------
-
-_Architecture = Literal["resnet18", "resnet50", "mlp", "custom"]
-
-
-class CreateModelArgs(BaseModel):
-    model_id: str
-    model_name: str
-    architecture: _Architecture = "mlp"
-    num_classes: int = Field(default=10, ge=1, le=10_000)
-    input_shape: list[int] = Field(default=[3, 224, 224])
-
-
-class TrainStepArgs(BaseModel):
-    model_id: str
-    batch_size: int = Field(default=32, ge=1, le=4096)
-    learning_rate: float = Field(default=0.001, gt=0.0, le=10.0)
-
-
-class EvaluateArgs(BaseModel):
-    model_id: str
-
-
-class SaveCheckpointArgs(BaseModel):
-    model_id: str
-    path: str | None = None
-
-
-class LoadCheckpointArgs(BaseModel):
-    model_id: str
-    path: str
-
-
-class GetTrainingStatusArgs(BaseModel):
-    model_id: str
-
-
-class GetModelRecommendationArgs(BaseModel):
-    task: str
-    dataset: str = ""
-
-
-class GetTrainingAnalysisArgs(BaseModel):
-    model_id: str
-
-
-class ListModelsArgs(BaseModel):
-    pass
-
-
-class GetSystemHealthArgs(BaseModel):
-    pass
-
-
-# ---------------------------------------------------------------------------
-# Tool → argument model registry
-# ---------------------------------------------------------------------------
-
-_TOOL_ARG_MODELS: dict[str, type[BaseModel]] = {
-    "pytorch_create_model": CreateModelArgs,
-    "pytorch_train_step": TrainStepArgs,
-    "pytorch_evaluate": EvaluateArgs,
-    "pytorch_save_checkpoint": SaveCheckpointArgs,
-    "pytorch_load_checkpoint": LoadCheckpointArgs,
-    "tensorflow_create_model": CreateModelArgs,
-    "tensorflow_train_step": TrainStepArgs,
-    "tensorflow_evaluate": EvaluateArgs,
-    "tensorflow_save_checkpoint": SaveCheckpointArgs,
-    "tensorflow_load_checkpoint": LoadCheckpointArgs,
-    "get_training_status": GetTrainingStatusArgs,
-    "list_models": ListModelsArgs,
-    "get_system_health": GetSystemHealthArgs,
-    "get_model_recommendation": GetModelRecommendationArgs,
-    "get_training_analysis": GetTrainingAnalysisArgs,
-}
+_DEFAULT_TOOL_CATALOG = ToolCatalog.default()
+# Backward-compatibility shim for validation-focused tests and callers that
+# still introspect the MCP argument model registry from this module.
+_TOOL_ARG_MODELS = _DEFAULT_TOOL_CATALOG.argument_models()
 
 
 class GhostMCPServer:
@@ -126,8 +54,16 @@ class GhostMCPServer:
         self.health_monitor = health_monitor or HealthMonitor()
         self.pytorch_ops = PyTorchOps(self.context_manager)
         self.tensorflow_ops = TensorFlowOps(self.context_manager)
+        self.tool_catalog = _DEFAULT_TOOL_CATALOG
 
         self._register_tools()
+
+    def _spec_to_tool(self, spec: ToolSpec) -> Tool:
+        return Tool(
+            name=spec.name,
+            description=spec.description,
+            inputSchema=spec.input_schema(),
+        )
 
     def _register_tools(self) -> None:
         """Register all MCP tools."""
@@ -136,209 +72,21 @@ class GhostMCPServer:
         async def list_tools() -> ListToolsResult:
             """List available MCP tools."""
             return ListToolsResult(
-                tools=[
-                    # PyTorch Tools
-                    Tool(
-                        name="pytorch_create_model",
-                        description="Create a new PyTorch model",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "model_name": {"type": "string"},
-                                "architecture": {
-                                    "type": "string",
-                                    "enum": ["resnet18", "resnet50", "mlp", "custom"],
-                                },
-                                "num_classes": {"type": "integer", "default": 10},
-                                "input_shape": {
-                                    "type": "array",
-                                    "items": {"type": "integer"},
-                                    "default": [3, 224, 224],
-                                },
-                            },
-                            "required": ["model_id", "model_name", "architecture"],
-                        },
-                    ),
-                    Tool(
-                        name="pytorch_train_step",
-                        description="Execute one training step",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "batch_size": {"type": "integer", "default": 32},
-                                "learning_rate": {"type": "number", "default": 0.001},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="pytorch_evaluate",
-                        description="Evaluate PyTorch model on dataset",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="pytorch_save_checkpoint",
-                        description="Save PyTorch model checkpoint",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "path": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="pytorch_load_checkpoint",
-                        description="Load PyTorch model checkpoint",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "path": {"type": "string"},
-                            },
-                            "required": ["model_id", "path"],
-                        },
-                    ),
-                    # TensorFlow Tools
-                    Tool(
-                        name="tensorflow_create_model",
-                        description="Create a new TensorFlow/Keras model",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "model_name": {"type": "string"},
-                                "architecture": {
-                                    "type": "string",
-                                    "enum": ["resnet18", "resnet50", "mlp", "custom"],
-                                },
-                                "num_classes": {"type": "integer", "default": 10},
-                                "input_shape": {
-                                    "type": "array",
-                                    "items": {"type": "integer"},
-                                    "default": [224, 224, 3],
-                                },
-                            },
-                            "required": ["model_id", "model_name", "architecture"],
-                        },
-                    ),
-                    Tool(
-                        name="tensorflow_train_step",
-                        description="Execute one training step",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "batch_size": {"type": "integer", "default": 32},
-                                "learning_rate": {"type": "number", "default": 0.001},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="tensorflow_evaluate",
-                        description="Evaluate TensorFlow model on dataset",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="tensorflow_save_checkpoint",
-                        description="Save TensorFlow model checkpoint",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "path": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="tensorflow_load_checkpoint",
-                        description="Load TensorFlow model checkpoint",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                                "path": {"type": "string"},
-                            },
-                            "required": ["model_id", "path"],
-                        },
-                    ),
-                    # Training Tools
-                    Tool(
-                        name="get_training_status",
-                        description="Get current training status for a model",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                    Tool(
-                        name="list_models",
-                        description="List all registered models",
-                        inputSchema={"type": "object", "properties": {}},
-                    ),
-                    Tool(
-                        name="get_system_health",
-                        description="Inspect resource health, thresholds, and cache usage",
-                        inputSchema={"type": "object", "properties": {}},
-                    ),
-                    Tool(
-                        name="get_model_recommendation",
-                        description="Get Ollama-powered model training recommendations",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "task": {"type": "string"},
-                                "dataset": {"type": "string"},
-                            },
-                            "required": ["task"],
-                        },
-                    ),
-                    Tool(
-                        name="get_training_analysis",
-                        description="Analyze a model's training history with Ollama",
-                        inputSchema={
-                            "type": "object",
-                            "properties": {
-                                "model_id": {"type": "string"},
-                            },
-                            "required": ["model_id"],
-                        },
-                    ),
-                ]
+                tools=[self._spec_to_tool(spec) for spec in self.tool_catalog.list_specs()]
             )
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Any) -> CallToolResult:
             """Handle tool calls with upfront Pydantic validation."""
             # --- Shift-left: validate arguments before any business logic ---
-            model_cls = _TOOL_ARG_MODELS.get(name)
-            if model_cls is None:
+            spec = self.tool_catalog.get_spec(name)
+            if spec is None:
                 return CallToolResult(
                     content=[TextContent(type="text", text=f"Unknown tool: {name}")],
                     isError=True,
                 )
             try:
-                model_cls.model_validate(arguments or {})
+                spec.input_model.model_validate(arguments or {})
             except ValidationError as exc:
                 error_msg = f"Invalid arguments for '{name}': {exc.errors()}"
                 logger.warning("tool_validation_error", tool=name, errors=exc.errors())
@@ -362,132 +110,136 @@ class GhostMCPServer:
 
     async def _handle_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Route tool calls to appropriate handlers."""
+        spec = self.tool_catalog.get_spec(name)
+        if spec is None:
+            return {"error": f"Unknown tool: {name}"}
 
-        # PyTorch operations
-        if name == "pytorch_create_model":
-            return await self.pytorch_ops.create_model(
-                model_id=arguments["model_id"],
-                model_name=arguments["model_name"],
-                architecture=arguments.get("architecture", "mlp"),
-                num_classes=arguments.get("num_classes", 10),
-                input_shape=arguments.get("input_shape", [3, 224, 224]),
-            )
+        handler = getattr(self, spec.handler_name, None)
+        if handler is None:
+            return {"error": f"Handler not found for tool: {name}"}
 
-        if name == "pytorch_train_step":
-            return await self.pytorch_ops.train_step(
-                model_id=arguments["model_id"],
-                batch_size=arguments.get("batch_size", 32),
-                learning_rate=arguments.get("learning_rate", 0.001),
-            )
+        return await handler(arguments)
 
-        if name == "pytorch_evaluate":
-            return await self.pytorch_ops.evaluate(arguments["model_id"])
+    async def _handle_pytorch_create_model(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.pytorch_ops.create_model(
+            model_id=arguments["model_id"],
+            model_name=arguments["model_name"],
+            architecture=arguments.get("architecture", "mlp"),
+            num_classes=arguments.get("num_classes", 10),
+            input_shape=arguments.get("input_shape", [3, 224, 224]),
+        )
 
-        if name == "pytorch_save_checkpoint":
-            return await self.pytorch_ops.save_checkpoint(
-                model_id=arguments["model_id"],
-                path=arguments.get("path"),
-            )
+    async def _handle_pytorch_train_step(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.pytorch_ops.train_step(
+            model_id=arguments["model_id"],
+            batch_size=arguments.get("batch_size", 32),
+            learning_rate=arguments.get("learning_rate", 0.001),
+        )
 
-        if name == "pytorch_load_checkpoint":
-            return await self.pytorch_ops.load_checkpoint(
-                model_id=arguments["model_id"],
-                path=arguments["path"],
-            )
+    async def _handle_pytorch_evaluate(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.pytorch_ops.evaluate(arguments["model_id"])
 
-        # TensorFlow operations
-        if name == "tensorflow_create_model":
-            return await self.tensorflow_ops.create_model(
-                model_id=arguments["model_id"],
-                model_name=arguments["model_name"],
-                architecture=arguments.get("architecture", "mlp"),
-                num_classes=arguments.get("num_classes", 10),
-                input_shape=arguments.get("input_shape", [224, 224, 3]),
-            )
+    async def _handle_pytorch_save_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.pytorch_ops.save_checkpoint(
+            model_id=arguments["model_id"],
+            path=arguments.get("path"),
+        )
 
-        if name == "tensorflow_train_step":
-            return await self.tensorflow_ops.train_step(
-                model_id=arguments["model_id"],
-                batch_size=arguments.get("batch_size", 32),
-                learning_rate=arguments.get("learning_rate", 0.001),
-            )
+    async def _handle_pytorch_load_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.pytorch_ops.load_checkpoint(
+            model_id=arguments["model_id"],
+            path=arguments["path"],
+        )
 
-        if name == "tensorflow_evaluate":
-            return await self.tensorflow_ops.evaluate(arguments["model_id"])
+    async def _handle_tensorflow_create_model(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.tensorflow_ops.create_model(
+            model_id=arguments["model_id"],
+            model_name=arguments["model_name"],
+            architecture=arguments.get("architecture", "mlp"),
+            num_classes=arguments.get("num_classes", 10),
+            input_shape=arguments.get("input_shape", [224, 224, 3]),
+        )
 
-        if name == "tensorflow_save_checkpoint":
-            return await self.tensorflow_ops.save_checkpoint(
-                model_id=arguments["model_id"],
-                path=arguments.get("path"),
-            )
+    async def _handle_tensorflow_train_step(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.tensorflow_ops.train_step(
+            model_id=arguments["model_id"],
+            batch_size=arguments.get("batch_size", 32),
+            learning_rate=arguments.get("learning_rate", 0.001),
+        )
 
-        if name == "tensorflow_load_checkpoint":
-            return await self.tensorflow_ops.load_checkpoint(
-                model_id=arguments["model_id"],
-                path=arguments["path"],
-            )
+    async def _handle_tensorflow_evaluate(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.tensorflow_ops.evaluate(arguments["model_id"])
 
-        # Training tools
-        if name == "get_training_status":
-            ctx = self.context_manager.get_context(arguments["model_id"])
-            if ctx:
-                return {
+    async def _handle_tensorflow_save_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.tensorflow_ops.save_checkpoint(
+            model_id=arguments["model_id"],
+            path=arguments.get("path"),
+        )
+
+    async def _handle_tensorflow_load_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.tensorflow_ops.load_checkpoint(
+            model_id=arguments["model_id"],
+            path=arguments["path"],
+        )
+
+    async def _handle_get_training_status(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        ctx = self.context_manager.get_context(arguments["model_id"])
+        if ctx:
+            return {
+                "model_id": ctx.model_id,
+                "state": ctx.state.value,
+                "epochs_completed": ctx.epochs_completed,
+                "current_step": ctx.current_step,
+                "metrics": len(ctx.metrics),
+            }
+        return {"error": "Model not found"}
+
+    async def _handle_list_models(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        contexts = self.context_manager.list_contexts()
+        return {
+            "models": [
+                {
                     "model_id": ctx.model_id,
-                    "state": ctx.state.value,
-                    "epochs_completed": ctx.epochs_completed,
-                    "current_step": ctx.current_step,
-                    "metrics": len(ctx.metrics),
+                    "name": ctx.model_name,
+                    "backend": ctx.backend.value,
                 }
+                for ctx in contexts
+            ]
+        }
+
+    async def _handle_get_system_health(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.health_monitor.get_health_report()
+
+    async def _handle_get_model_recommendation(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.ollama_client.get_recommendation(
+            task=arguments["task"],
+            dataset=arguments.get("dataset", ""),
+        )
+
+    async def _handle_get_training_analysis(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        ctx = self.context_manager.get_context(arguments["model_id"])
+        if not ctx:
             return {"error": "Model not found"}
 
-        if name == "list_models":
-            contexts = self.context_manager.list_contexts()
-            return {
-                "models": [
-                    {
-                        "model_id": ctx.model_id,
-                        "name": ctx.model_name,
-                        "backend": ctx.backend.value,
-                    }
-                    for ctx in contexts
-                ]
-            }
+        if not ctx.metrics:
+            return {"error": "No training metrics available for model"}
 
-        if name == "get_system_health":
-            return self.health_monitor.get_health_report()
-
-        if name == "get_model_recommendation":
-            return await self.ollama_client.get_recommendation(
-                task=arguments["task"],
-                dataset=arguments.get("dataset", ""),
-            )
-
-        if name == "get_training_analysis":
-            ctx = self.context_manager.get_context(arguments["model_id"])
-            if not ctx:
-                return {"error": "Model not found"}
-
-            if not ctx.metrics:
-                return {"error": "No training metrics available for model"}
-
-            analysis = await self.ollama_client.analyze_training_progress(
-                [
-                    {
-                        "epoch": metric.epoch,
-                        "step": metric.step,
-                        "loss": metric.loss,
-                        "accuracy": metric.accuracy,
-                        "learning_rate": metric.learning_rate,
-                    }
-                    for metric in ctx.metrics
-                ]
-            )
-            if analysis.get("status") == "success":
-                ctx.metadata["training_analysis"] = analysis
-                self.context_manager.update_context(ctx)
-            return analysis
-
-        return {"error": f"Unknown tool: {name}"}
+        analysis = await self.ollama_client.analyze_training_progress(
+            [
+                {
+                    "epoch": metric.epoch,
+                    "step": metric.step,
+                    "loss": metric.loss,
+                    "accuracy": metric.accuracy,
+                    "learning_rate": metric.learning_rate,
+                }
+                for metric in ctx.metrics
+            ]
+        )
+        if analysis.get("status") == "success":
+            ctx.metadata["training_analysis"] = analysis
+            self.context_manager.update_context(ctx)
+        return analysis
 
     async def run(self) -> None:
         """Run the MCP server."""

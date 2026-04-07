@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -16,6 +16,10 @@ from ghost.health_monitor import HealthMonitor
 from ghost.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class BackendOps(Protocol):
@@ -114,7 +118,7 @@ class TrainingPipeline:
         Returns:
             Training result with metrics history and checkpoint info.
         """
-        start_time = datetime.utcnow()
+        start_time = _utc_now()
         ctx = self.context_manager.get_context(config.model_id)
 
         if not ctx:
@@ -155,7 +159,7 @@ class TrainingPipeline:
 
             result = await self._run_training_loop(ops, config, stop_event)
 
-            duration = (datetime.utcnow() - start_time).total_seconds()
+            duration = (_utc_now() - start_time).total_seconds()
             result.duration_seconds = duration
 
             final_state = ModelState.READY if result.success else ModelState.FAILED
