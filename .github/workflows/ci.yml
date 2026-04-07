@@ -29,7 +29,7 @@ jobs:
           cache: pip
 
       - name: Install dev dependencies
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: ruff lint
         run: ruff check src/ghost agents/
@@ -67,18 +67,19 @@ jobs:
         # torch / tensorflow / ollama / mcp are all mocked in conftest.py,
         # so we skip the multi-GB installs in CI.
         run: |
-          pip install \
-            pydantic>=2.0.0 \
-            pydantic-settings>=2.0.0 \
-            structlog>=24.0.0 \
-            python-dotenv>=1.0.0 \
-            pytest>=8.0.0 \
-            pytest-asyncio>=0.23.0 \
-            pytest-cov>=4.0.0
+          python -m pip install --no-deps -e .
+          python -m pip install \
+            "pydantic>=2.0.0" \
+            "pydantic-settings>=2.0.0" \
+            "structlog>=24.0.0" \
+            "python-dotenv>=1.0.0" \
+            "pytest>=8.0.0" \
+            "pytest-asyncio>=0.23.0" \
+            "pytest-cov>=4.0.0"
 
       - name: Run tests with coverage
         run: |
-          pytest tests/ \
+          python -m pytest tests/ \
             --cov=src/ghost \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
@@ -109,12 +110,12 @@ jobs:
           cache: pip
 
       - name: Install security tools
-        run: pip install bandit pip-audit
+        run: python -m pip install bandit pip-audit
 
       - name: Bandit — static security analysis
         # Scan source + agent code; skip test stubs
         run: |
-          bandit \
+          python -m bandit \
             --recursive src/ghost/ agents/ \
             --severity-level medium \
             --confidence-level medium \
@@ -125,11 +126,13 @@ jobs:
       - name: pip-audit — dependency CVE scan
         # Installs only lightweight deps; heavy ML packages are not installed
         run: |
-          pip install \
-            pydantic>=2.0.0 \
-            pydantic-settings>=2.0.0 \
-            structlog>=24.0.0 \
-            python-dotenv>=1.0.0
+          python -m pip install --no-deps -e .
+          python -m pip install \
+            "pydantic>=2.0.0" \
+            "pydantic-settings>=2.0.0" \
+            "psutil>=5.9.0" \
+            "structlog>=24.0.0" \
+            "python-dotenv>=1.0.0"
           pip-audit --strict
 
       - name: Upload Bandit report
