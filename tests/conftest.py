@@ -13,6 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+
+for _path in (PROJECT_ROOT, SRC_ROOT):
+    _path_str = str(_path)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
+
 # ---------------------------------------------------------------------------
 # Heavy-dependency stubs (installed before any ghost.* imports)
 # ---------------------------------------------------------------------------
