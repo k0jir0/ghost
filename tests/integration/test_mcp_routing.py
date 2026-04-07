@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ghost.context import BackendType, ContextManager
+from ghost.context import BackendType, ContextManager, TrainingMetrics
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,16 @@ def _make_server(tmp_data_dir: Path) -> Any:
 
     ollama_client.get_recommendation = AsyncMock(
         return_value={"status": "success", "recommendations": {"architecture": "mlp"}}
+    )
+    ollama_client.analyze_training_progress = AsyncMock(
+        return_value={
+            "status": "success",
+            "analysis": {
+                "status": "good",
+                "analysis": "Training is converging normally.",
+                "suggestions": ["Continue training"],
+            },
+        }
     )
     health_monitor.get_health_report.return_value = {
         "status": "healthy",
@@ -220,6 +230,28 @@ class TestContextTools:
         health_monitor.get_health_report.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_get_training_analysis(self, tmp_data_dir: Path) -> None:
+        server, cm, *_, ollama_client, _ = _make_server(tmp_data_dir)
+        ctx = cm.create_context("analysis", "Analysis", BackendType.PYTORCH)
+        ctx.add_metric(
+            TrainingMetrics(
+                epoch=1,
+                step=1,
+                loss=0.5,
+                accuracy=0.8,
+                learning_rate=0.001,
+            )
+        )
+        cm.update_context(ctx)
+
+        result = await server._handle_tool(
+            "get_training_analysis", {"model_id": "analysis"}
+        )
+
+        assert result.get("status") == "success"
+        ollama_client.analyze_training_progress.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self, tmp_data_dir: Path) -> None:
         server, *_ = _make_server(tmp_data_dir)
         result = await server._handle_tool("nonexistent_tool", {})
@@ -312,6 +344,10 @@ class TestPydanticValidation:
 
     def test_recommendation_requires_task(self) -> None:
         exc = self._validate("get_model_recommendation", {})
+        assert exc is not None
+
+    def test_training_analysis_requires_model_id(self) -> None:
+        exc = self._validate("get_training_analysis", {})
         assert exc is not None
 
     def test_list_models_accepts_empty_args(self) -> None:

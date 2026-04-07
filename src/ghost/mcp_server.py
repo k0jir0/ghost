@@ -72,6 +72,10 @@ class GetModelRecommendationArgs(BaseModel):
     dataset: str = ""
 
 
+class GetTrainingAnalysisArgs(BaseModel):
+    model_id: str
+
+
 class ListModelsArgs(BaseModel):
     pass
 
@@ -99,6 +103,7 @@ _TOOL_ARG_MODELS: dict[str, type[BaseModel]] = {
     "list_models": ListModelsArgs,
     "get_system_health": GetSystemHealthArgs,
     "get_model_recommendation": GetModelRecommendationArgs,
+    "get_training_analysis": GetTrainingAnalysisArgs,
 }
 
 
@@ -308,6 +313,17 @@ class GhostMCPServer:
                             "required": ["task"],
                         },
                     ),
+                    Tool(
+                        name="get_training_analysis",
+                        description="Analyze a model's training history with Ollama",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "model_id": {"type": "string"},
+                            },
+                            "required": ["model_id"],
+                        },
+                    ),
                 ]
             )
 
@@ -445,6 +461,31 @@ class GhostMCPServer:
                 task=arguments["task"],
                 dataset=arguments.get("dataset", ""),
             )
+
+        if name == "get_training_analysis":
+            ctx = self.context_manager.get_context(arguments["model_id"])
+            if not ctx:
+                return {"error": "Model not found"}
+
+            if not ctx.metrics:
+                return {"error": "No training metrics available for model"}
+
+            analysis = await self.ollama_client.analyze_training_progress(
+                [
+                    {
+                        "epoch": metric.epoch,
+                        "step": metric.step,
+                        "loss": metric.loss,
+                        "accuracy": metric.accuracy,
+                        "learning_rate": metric.learning_rate,
+                    }
+                    for metric in ctx.metrics
+                ]
+            )
+            if analysis.get("status") == "success":
+                ctx.metadata["training_analysis"] = analysis
+                self.context_manager.update_context(ctx)
+            return analysis
 
         return {"error": f"Unknown tool: {name}"}
 

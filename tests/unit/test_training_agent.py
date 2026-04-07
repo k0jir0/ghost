@@ -182,6 +182,27 @@ class TestBackendDetection:
         agent.pytorch_ops.create_model.assert_called_once()
         agent.tensorflow_ops.create_model.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_configured_backend_used_when_task_has_no_framework_keyword(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        tasks_file = tmp_path / "TASKS.md"
+        tasks_file.write_text("## Queue\n\n- [ ] Train image classifier\n")
+        agent = _make_agent(tasks_file, tmp_path / "AGENT.md", tmp_path)
+
+        agent.config.training_backend = "tensorflow"
+        agent.pytorch_ops.create_model = AsyncMock(return_value={"status": "success"})
+        agent.tensorflow_ops.create_model = AsyncMock(return_value={"status": "success"})
+        agent.training_pipeline.train = AsyncMock(return_value=MagicMock(success=True, metrics_history=[]))
+        agent.ollama_client.get_recommendation = AsyncMock(return_value={"status": "error"})
+
+        task = agent.parse_tasks()[0]
+        await agent.execute_task(task)
+
+        agent.tensorflow_ops.create_model.assert_called_once()
+        agent.pytorch_ops.create_model.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # execute_task — model creation failure path
@@ -228,3 +249,41 @@ class TestExecuteTask:
 
         remaining = [t["text"] for t in agent.parse_tasks()]
         assert first_text not in remaining
+
+    @pytest.mark.asyncio
+    async def test_recommendations_drive_training_plan(self, tmp_path: Path) -> None:
+        tasks_file = tmp_path / "TASKS.md"
+        tasks_file.write_text("## Queue\n\n- [ ] Train ResNet50 on CIFAR-10 image classification\n")
+        agent = _make_agent(tasks_file, tmp_path / "AGENT.md", tmp_path)
+
+        agent.pytorch_ops.create_model = AsyncMock(return_value={"status": "success"})
+        agent.tensorflow_ops.create_model = AsyncMock(return_value={"status": "success"})
+        agent.training_pipeline.train = AsyncMock(
+            return_value=MagicMock(success=True, metrics_history=[])
+        )
+        agent.ollama_client.get_recommendation = AsyncMock(
+            return_value={
+                "status": "success",
+                "recommendations": {
+                    "architecture": "resnet50",
+                    "batch_size": 64,
+                    "learning_rate": 0.01,
+                    "epochs": 3,
+                    "optimizer": "adamw",
+                    "tips": ["Use cosine decay"],
+                },
+            }
+        )
+
+        task = agent.parse_tasks()[0]
+        result = await agent.execute_task(task)
+
+        create_call = agent.pytorch_ops.create_model.await_args
+        assert create_call.kwargs["architecture"] == "resnet50"
+        assert create_call.kwargs["num_classes"] == 10
+
+        training_config = agent.training_pipeline.train.await_args.args[0]
+        assert training_config.batch_size == 64
+        assert training_config.learning_rate == 0.01
+        assert training_config.epochs == 3
+        assert result["plan"]["recommendation_source"] == "ollama"

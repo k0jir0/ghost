@@ -31,6 +31,7 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **MCP Protocol** — Standardized tool interface for AI model interactions via `GhostMCPServer`
 - **Local LLM** — Ollama integration for private, offline inference and model recommendations
 - **Autonomous Training Agent** — Watches `TASKS.md` and executes training tasks automatically
+- **Recommendation-Driven Planning** — The agent uses Ollama recommendations to select architecture and training hyperparameters before execution
 - **Explicit Demo Mode** — Synthetic training and evaluation data is disabled by default and must be opted into for scaffold/demo runs
 - **Health Monitoring** — GPU, memory, and cache monitoring with configurable thresholds
 - **Graceful Degradation** — Memory pressure automatically reduces training batch size before the run escalates
@@ -146,6 +147,7 @@ ghost/
 | `list_models` | List all registered models with backend info |
 | `get_system_health` | Report memory usage, cache sizes, and threshold status |
 | `get_model_recommendation` | Get Ollama-powered model/architecture suggestions for a task |
+| `get_training_analysis` | Ask Ollama to analyze a model's recorded training metrics and suggest next steps |
 
 ## Health Monitoring
 
@@ -192,6 +194,8 @@ Edit `TASKS.md` to queue training tasks for the autonomous agent:
 ```
 
 The training agent will pick them up automatically on the next iteration.
+
+When Ollama is available, Ghost now turns the task text into a lightweight training plan before execution. That plan influences the selected architecture plus the initial batch size, learning rate, and epochs while still falling back safely to the repository defaults when recommendations are missing or malformed.
 
 Without a real dataset pipeline, these tasks will fail closed by default. Set `ALLOW_SYNTHETIC_DATA=true` only when you intentionally want demo-mode synthetic batches.
 
