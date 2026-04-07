@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+import time
 from typing import Any, Literal
 
 from ghost.config import GhostConfig, get_config
@@ -71,9 +72,20 @@ class HealthMonitor:
 
     def __init__(self, config: GhostConfig | None = None):
         self.config = config or get_config()
+        self._last_snapshot: ResourceSnapshot | None = None
+        self._last_checked_monotonic: float | None = None
 
-    def check_resources(self) -> ResourceSnapshot:
+    def check_resources(self, *, force: bool = False) -> ResourceSnapshot:
         """Collect the current resource state and evaluate configured thresholds."""
+        now = time.monotonic()
+        if (
+            not force
+            and self._last_snapshot is not None
+            and self._last_checked_monotonic is not None
+            and now - self._last_checked_monotonic < self.config.health_check_interval
+        ):
+            return self._last_snapshot
+
         issues: list[HealthIssue] = []
         system_memory_ratio = self._get_system_memory_ratio(issues)
         gpu_memory_ratio = self._get_gpu_memory_ratio(issues)
@@ -116,6 +128,8 @@ class HealthMonitor:
             data_cache_size_bytes=self._directory_size(self.config.data_cache_dir),
             issues=issues,
         )
+        self._last_snapshot = snapshot
+        self._last_checked_monotonic = now
         return snapshot
 
     def recommended_batch_size(

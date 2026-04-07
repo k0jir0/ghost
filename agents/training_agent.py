@@ -43,7 +43,13 @@ class TrainingAgent:
         self.context_manager = ContextManager()
         self.pytorch_ops = PyTorchOps(self.context_manager)
         self.tensorflow_ops = TensorFlowOps(self.context_manager)
-        self.training_pipeline = TrainingPipeline(self.context_manager)
+        self.training_pipeline = TrainingPipeline(
+            self.context_manager,
+            backend_ops={
+                BackendType.PYTORCH: self.pytorch_ops,
+                BackendType.TENSORFLOW: self.tensorflow_ops,
+            },
+        )
         self.ollama_client = OllamaClient()
 
         self._running = False
@@ -87,7 +93,7 @@ Running: {self._running}
 - Backend: {self.config.training_backend}
 - Ollama Model: {self.config.ollama_model}
 - Max Iterations: {self.config.max_iterations}
-- Daily Token Budget: ${self.config.daily_token_budget:.2f}
+- Synthetic Demo Data: {self.config.allow_synthetic_data}
 
 ## Notes
 

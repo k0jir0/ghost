@@ -92,7 +92,7 @@ class GhostConfig(BaseSettings):
     )
 
     # Agent Settings
-    ai_backend: Literal["ollama", "openai", "anthropic"] = Field(
+    ai_backend: Literal["ollama"] = Field(
         default="ollama",
         description="AI backend for agent assistance"
     )
@@ -100,9 +100,11 @@ class GhostConfig(BaseSettings):
         default=100,
         description="Maximum agent iterations before check-in"
     )
-    daily_token_budget: float = Field(
-        default=10.0,
-        description="Daily token budget in USD"
+    allow_synthetic_data: bool = Field(
+        default=False,
+        description=(
+            "Allow demo-mode synthetic batches when no real data pipeline is configured"
+        )
     )
 
     # Health Checks
@@ -131,6 +133,30 @@ class GhostConfig(BaseSettings):
         """Create necessary directories if they don't exist."""
         self.model_cache_dir.mkdir(parents=True, exist_ok=True)
         self.data_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def resolve_checkpoint_path(
+        self,
+        model_id: str,
+        path: str | Path | None = None,
+        *,
+        suffix: str = "",
+    ) -> Path:
+        """Resolve a checkpoint path under the configured model cache directory."""
+        candidate = Path(path) if path is not None else Path(f"{model_id}{suffix}")
+        return self._resolve_within_directory(self.model_cache_dir, candidate)
+
+    def _resolve_within_directory(self, base_dir: Path, candidate: Path) -> Path:
+        """Resolve a user-supplied path while preventing directory escape."""
+        root = base_dir.resolve(strict=False)
+        resolved = candidate if candidate.is_absolute() else root / candidate
+        resolved = resolved.resolve(strict=False)
+
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"Path must stay within {root}") from exc
+
+        return resolved
 
     def is_gpu_available(self) -> bool:
         """Check if GPU is available for training."""

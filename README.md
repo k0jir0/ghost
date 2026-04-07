@@ -31,6 +31,7 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **MCP Protocol** — Standardized tool interface for AI model interactions via `GhostMCPServer`
 - **Local LLM** — Ollama integration for private, offline inference and model recommendations
 - **Autonomous Training Agent** — Watches `TASKS.md` and executes training tasks automatically
+- **Explicit Demo Mode** — Synthetic training and evaluation data is disabled by default and must be opted into for scaffold/demo runs
 - **Health Monitoring** — GPU, memory, and cache monitoring with configurable thresholds
 - **Graceful Degradation** — Memory pressure automatically reduces training batch size before the run escalates
 - **Type-Safe Config** — Pydantic-based `GhostConfig` with `.env` file support
@@ -67,11 +68,13 @@ cp .env.example .env   # or create manually
 # Key settings:
 # OLLAMA_HOST=http://localhost:11434
 # OLLAMA_MODEL=llama3
+# AI_BACKEND=ollama            # only supported AI backend today
 # TRAINING_BACKEND=auto          # pytorch | tensorflow | auto
 # GPU_ENABLED=true
 # LOG_LEVEL=INFO
 # MODEL_CACHE_DIR=./models
 # DATA_CACHE_DIR=./data
+# ALLOW_SYNTHETIC_DATA=false    # set true only for demo/scaffold runs
 ```
 
 ### Running
@@ -150,6 +153,7 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 
 - `get_system_health` returns current system memory usage, GPU memory usage when available, cache sizes, and any active threshold violations.
 - The training pipeline samples health before each epoch and reduces batch size when GPU or system memory crosses configured thresholds.
+- Health samples are cached for `HEALTH_CHECK_INTERVAL` seconds so the interval setting now controls real sampling cadence instead of acting as documentation only.
 - Cache directories are included in the health report so long-running sessions can inspect model and data footprint.
 
 ## Configuration Reference
@@ -170,7 +174,7 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 | `DEFAULT_EPOCHS` | Default number of training epochs | `10` |
 | `CHECKPOINT_INTERVAL` | Save checkpoint every N epochs | `5` |
 | `MAX_ITERATIONS` | Max agent iterations before check-in | `100` |
-| `DAILY_TOKEN_BUDGET` | Daily AI token budget (USD) | `10.0` |
+| `ALLOW_SYNTHETIC_DATA` | Permit random demo batches when no dataset pipeline exists | `false` |
 | `HEALTH_CHECK_INTERVAL` | Health check interval (seconds) | `30` |
 | `GPU_MEMORY_THRESHOLD` | GPU memory usage alert threshold | `0.9` |
 | `SYSTEM_MEMORY_THRESHOLD` | System memory usage alert threshold | `0.85` |
@@ -188,6 +192,8 @@ Edit `TASKS.md` to queue training tasks for the autonomous agent:
 ```
 
 The training agent will pick them up automatically on the next iteration.
+
+Without a real dataset pipeline, these tasks will fail closed by default. Set `ALLOW_SYNTHETIC_DATA=true` only when you intentionally want demo-mode synthetic batches.
 
 ## License
 

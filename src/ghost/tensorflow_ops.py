@@ -33,9 +33,25 @@ class TensorFlowOps:
     def __init__(self, context_manager: ContextManager):
         """Initialize TensorFlow operations."""
         self.context_manager = context_manager
-        self.models: dict[str, Any] = {}
+        self.config = get_config()
+        runtime = self.context_manager.get_runtime_bucket("tensorflow")
+        self.models: dict[str, Any] = runtime.setdefault("models", {})
         self._initialized = False
         logger.info("tensorflow_ops_init")
+
+    def _ensure_synthetic_data_enabled(self, operation: str) -> None:
+        """Fail closed when no real dataset pipeline exists."""
+        if self.config.allow_synthetic_data:
+            return
+
+        raise RuntimeError(
+            f"{operation} requires a real dataset pipeline. "
+            "Set ALLOW_SYNTHETIC_DATA=true only for demo runs."
+        )
+
+    def _resolve_checkpoint_path(self, model_id: str, path: str | None = None) -> Path:
+        """Resolve checkpoint paths inside the configured model cache."""
+        return self.config.resolve_checkpoint_path(model_id, path, suffix=".keras")
 
     def _ensure_initialized(self) -> None:
         """Ensure TensorFlow is imported."""
@@ -176,9 +192,12 @@ class TensorFlowOps:
             model = self.models.get(model_id)
             if model is None:
                 return {"status": "error", "message": "Model not found"}
+
+            self._ensure_synthetic_data_enabled("Training")
             
             ctx = self.context_manager.get_context(model_id)
             if ctx:
+                ctx.metadata["data_mode"] = "synthetic"
                 ctx.update_state(ModelState.TRAINING)
                 self.context_manager.update_context(ctx)
             
@@ -209,6 +228,7 @@ class TensorFlowOps:
                 "step": ctx.current_step if ctx else 1,
                 "loss": float(history[0]) if isinstance(history, (list, tuple)) else float(history),
                 "accuracy": float(history[1]) if isinstance(history, (list, tuple)) and len(history) > 1 else None,
+                "data_mode": "synthetic",
             }
         except Exception as e:
             logger.error("train_step_failed", model_id=model_id, error=str(e))
@@ -220,9 +240,12 @@ class TensorFlowOps:
             model = self.models.get(model_id)
             if model is None:
                 return {"status": "error", "message": "Model not found"}
+
+            self._ensure_synthetic_data_enabled("Evaluation")
             
             ctx = self.context_manager.get_context(model_id)
             if ctx:
+                ctx.metadata["data_mode"] = "synthetic"
                 ctx.update_state(ModelState.EVALUATING)
                 self.context_manager.update_context(ctx)
             
@@ -244,6 +267,7 @@ class TensorFlowOps:
                 "eval_loss": float(results[0]) if isinstance(results, (list, tuple)) else float(results),
                 "eval_accuracy": float(results[1]) if isinstance(results, (list, tuple)) and len(results) > 1 else None,
                 "num_samples": 10,
+                "data_mode": "synthetic",
             }
         except Exception as e:
             logger.error("evaluate_failed", model_id=model_id, error=str(e))
@@ -260,13 +284,11 @@ class TensorFlowOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
             
-            config = get_config()
-            save_path = Path(path) if path else config.model_cache_dir / model_id
+            save_path = self._resolve_checkpoint_path(model_id, path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Save in SavedModel format
             save_str = str(save_path)
-            model.save(save_str, save_format='tf')
+            model.save(save_str)
             
             ctx = self.context_manager.get_context(model_id)
             if ctx:
@@ -288,7 +310,7 @@ class TensorFlowOps:
     ) -> dict[str, Any]:
         """Load model checkpoint."""
         try:
-            checkpoint_path = Path(path)
+            checkpoint_path = self._resolve_checkpoint_path(model_id, path)
             if not checkpoint_path.exists():
                 return {"status": "error", "message": "Checkpoint not found"}
             

@@ -18,7 +18,12 @@ from ghost.training import TrainingConfig, TrainingPipeline, TrainingResult
 # ---------------------------------------------------------------------------
 
 def _make_success_step(loss: float = 0.5) -> dict[str, Any]:
-    return {"status": "success", "loss": loss, "accuracy": 0.8}
+    return {
+        "status": "success",
+        "loss": loss,
+        "accuracy": 0.8,
+        "data_mode": "synthetic",
+    }
 
 
 def _mock_ops(losses: list[float] | None = None) -> MagicMock:
@@ -53,6 +58,57 @@ class StubHealthMonitor:
         if has_memory_pressure and current_batch_size > 1:
             return max(1, current_batch_size // 2)
         return current_batch_size
+
+
+class SharedRuntimeFakePyTorchOps:
+    def __init__(self, context_manager: ContextManager):
+        self.context_manager = context_manager
+        runtime = context_manager.get_runtime_bucket("shared-runtime-fake-pytorch")
+        self.models: dict[str, dict[str, Any]] = runtime.setdefault("models", {})
+
+    async def create_model(
+        self,
+        model_id: str,
+        model_name: str,
+        architecture: str = "mlp",
+        num_classes: int = 10,
+        input_shape: list[int] | None = None,
+    ) -> dict[str, Any]:
+        self.models[model_id] = {"architecture": architecture}
+        ctx = self.context_manager.create_context(
+            model_id=model_id,
+            model_name=model_name,
+            backend=BackendType.PYTORCH,
+            architecture=architecture,
+            num_classes=num_classes,
+            input_shape=input_shape or [3, 224, 224],
+        )
+        ctx.update_state(ModelState.READY)
+        self.context_manager.update_context(ctx)
+        return {"status": "success", "model_id": model_id}
+
+    async def train_step(
+        self,
+        model_id: str,
+        batch_size: int,
+        learning_rate: float,
+    ) -> dict[str, Any]:
+        if model_id not in self.models:
+            return {"status": "error", "message": "Model not found"}
+        return {
+            "status": "success",
+            "loss": 0.25,
+            "accuracy": 0.9,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "data_mode": "synthetic",
+        }
+
+    async def save_checkpoint(self, model_id: str) -> dict[str, Any]:
+        return {
+            "status": "success",
+            "path": str(self.context_manager.storage_path / f"{model_id}.pt"),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +179,8 @@ class TestTrainingPipelineLoop:
         assert result.success is True
         assert result.epochs_completed == 3
         assert len(result.metrics_history) > 0
+        assert result.data_mode == "synthetic"
+        assert result.used_synthetic_data is True
 
     def test_early_stopping_triggers(self, tmp_data_dir: Path) -> None:
         cm = ContextManager(storage_path=tmp_data_dir)
@@ -262,3 +320,55 @@ class TestTrainingPipelineLoop:
         assert result.effective_batch_size == 32
         assert result.health_status == "degraded"
         assert ops.train_step.await_args_list[0].kwargs["batch_size"] == 32
+
+    def test_no_successful_steps_returns_failure(self, tmp_data_dir: Path) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        cm.create_context("broken", "Broken", BackendType.PYTORCH)
+
+        pipeline = TrainingPipeline(context_manager=cm)
+        ops = MagicMock()
+        ops.train_step = AsyncMock(
+            return_value={"status": "error", "message": "Model not found"}
+        )
+        ops.save_checkpoint = AsyncMock(return_value={"status": "success"})
+
+        cfg = TrainingConfig(
+            model_id="broken",
+            backend=BackendType.PYTORCH,
+            epochs=1,
+            steps_per_epoch=1,
+        )
+
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
+            result = self._run(pipeline, cfg)
+
+        assert result.success is False
+        assert result.epochs_completed == 0
+        assert "model not found" in (result.error or "").lower()
+
+    def test_create_then_train_works_with_fresh_backend_instance(
+        self,
+        tmp_data_dir: Path,
+    ) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        pipeline = TrainingPipeline(context_manager=cm)
+        creator = SharedRuntimeFakePyTorchOps(cm)
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(
+            creator.create_model("shared", "Shared", architecture="mlp")
+        )
+
+        cfg = TrainingConfig(
+            model_id="shared",
+            backend=BackendType.PYTORCH,
+            epochs=1,
+            steps_per_epoch=1,
+        )
+
+        with patch("ghost.pytorch_ops.PyTorchOps", SharedRuntimeFakePyTorchOps):
+            result = self._run(pipeline, cfg)
+
+        assert result.success is True
+        assert result.epochs_completed == 1

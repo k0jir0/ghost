@@ -119,6 +119,35 @@ class TestContextManager:
         raw = json.loads((tmp_data_dir / "upd.json").read_text())
         assert raw["state"] == "training"
 
+    def test_runtime_bucket_is_shared(self, tmp_data_dir: Path) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+
+        bucket = cm.get_runtime_bucket("pytorch")
+        bucket["models"] = {"m1": object()}
+
+        assert cm.get_runtime_bucket("pytorch")["models"].keys() == {"m1"}
+
+    def test_atomic_save_preserves_existing_file_on_replace_failure(
+        self,
+        tmp_data_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        ctx = cm.create_context("atomic", "Atomic", BackendType.PYTORCH)
+        original = (tmp_data_dir / "atomic.json").read_text()
+        ctx.update_state(ModelState.TRAINING)
+
+        def _fail_replace(self: Path, target: Path) -> Path:
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("ghost.context.Path.replace", _fail_replace)
+
+        with pytest.raises(OSError):
+            cm.update_context(ctx)
+
+        assert (tmp_data_dir / "atomic.json").read_text() == original
+        assert not any(path.suffix == ".tmp" for path in tmp_data_dir.iterdir())
+
     def test_list_contexts_returns_all(self, tmp_data_dir: Path) -> None:
         cm = ContextManager(storage_path=tmp_data_dir)
         cm.create_context("a", "A", BackendType.PYTORCH)

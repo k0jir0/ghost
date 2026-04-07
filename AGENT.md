@@ -21,7 +21,7 @@ Running: false
 - Backend: PyTorch (default)
 - Ollama Model: llama3
 - Max Iterations: 100
-- Daily Token Budget: $10.00
+- Synthetic Demo Data: False
 
 ## Notes
 

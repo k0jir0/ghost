@@ -65,3 +65,33 @@ class TestHealthMonitor:
 
         assert snapshot.status == "warning"
         assert any(issue.code == "psutil-unavailable" for issue in snapshot.issues)
+
+    def test_health_check_interval_reuses_cached_snapshot(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(
+            model_cache_dir=tmp_path / "models",
+            data_cache_dir=tmp_path / "data",
+            gpu_enabled=False,
+            health_check_interval=30,
+        )
+        cfg.ensure_directories()
+
+        monitor = HealthMonitor(config=cfg)
+
+        with (
+            patch("ghost.health_monitor.psutil") as psutil_mock,
+            patch("ghost.health_monitor.time.monotonic", side_effect=[100.0, 110.0, 141.0]),
+        ):
+            psutil_mock.virtual_memory.side_effect = [
+                SimpleNamespace(percent=42.0),
+                SimpleNamespace(percent=90.0),
+            ]
+
+            first = monitor.check_resources()
+            second = monitor.check_resources()
+            third = monitor.check_resources()
+
+        assert first.checked_at == second.checked_at
+        assert psutil_mock.virtual_memory.call_count == 2
+        assert first.status == "healthy"
+        assert second.status == "healthy"
+        assert third.status == "degraded"

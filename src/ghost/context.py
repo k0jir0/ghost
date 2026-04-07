@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 
 class ModelState(Enum):
@@ -109,6 +110,7 @@ class ContextManager:
         self.storage_path = storage_path or Path("./data/contexts")
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self._contexts: dict[str, ModelContext] = {}
+        self._runtime_buckets: dict[str, dict[str, Any]] = {}
         self._load_existing()
 
     def _load_existing(self) -> None:
@@ -166,10 +168,21 @@ class ContextManager:
         """List all model contexts."""
         return list(self._contexts.values())
 
+    def get_runtime_bucket(self, name: str) -> dict[str, Any]:
+        """Return an in-memory runtime bucket shared across collaborating components."""
+        return self._runtime_buckets.setdefault(name, {})
+
     def _save_context(self, ctx: ModelContext) -> None:
         """Save context to disk."""
         ctx_file = self.storage_path / f"{ctx.model_id}.json"
-        ctx_file.write_text(json.dumps(ctx.to_dict(), indent=2))
+        temp_file = ctx_file.with_name(f".{ctx_file.name}.{uuid4().hex}.tmp")
+
+        try:
+            temp_file.write_text(json.dumps(ctx.to_dict(), indent=2), encoding="utf-8")
+            temp_file.replace(ctx_file)
+        finally:
+            if temp_file.exists():
+                temp_file.unlink()
 
     def delete_context(self, model_id: str) -> bool:
         """Delete a model context."""

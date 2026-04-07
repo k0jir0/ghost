@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import ValidationError
 import pytest
 
 from ghost.config import GhostConfig, get_config, reset_config
@@ -40,13 +41,17 @@ class TestGhostConfigDefaults:
         cfg = GhostConfig()
         assert cfg.default_learning_rate == pytest.approx(0.001)
 
-    def test_daily_token_budget_positive(self) -> None:
+    def test_allow_synthetic_data_disabled_by_default(self) -> None:
         cfg = GhostConfig()
-        assert cfg.daily_token_budget > 0
+        assert cfg.allow_synthetic_data is False
 
     def test_health_check_interval_positive(self) -> None:
         cfg = GhostConfig()
         assert cfg.health_check_interval > 0
+
+    def test_default_ai_backend_is_ollama(self) -> None:
+        cfg = GhostConfig()
+        assert cfg.ai_backend == "ollama"
 
 
 class TestGhostConfigEnvOverride:
@@ -71,6 +76,10 @@ class TestGhostConfigEnvOverride:
         monkeypatch.setenv("TRAINING_BACKEND", "pytorch")
         cfg = GhostConfig()
         assert cfg.training_backend == "pytorch"
+
+    def test_invalid_ai_backend_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            GhostConfig(ai_backend="openai")  # type: ignore[arg-type]
 
 
 class TestResolvePath:
@@ -112,6 +121,42 @@ class TestEnsureDirectories:
         cfg.ensure_directories()
         cfg.ensure_directories()  # should not raise
         assert cfg.model_cache_dir.exists()
+
+
+class TestCheckpointPathResolution:
+    def test_default_checkpoint_path_uses_model_cache(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(
+            model_cache_dir=tmp_path / "models",
+            data_cache_dir=tmp_path / "data",
+        )
+        cfg.ensure_directories()
+
+        resolved = cfg.resolve_checkpoint_path("demo", suffix=".pt")
+
+        assert resolved == (cfg.model_cache_dir / "demo.pt").resolve(strict=False)
+
+    def test_relative_checkpoint_path_stays_under_model_cache(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(
+            model_cache_dir=tmp_path / "models",
+            data_cache_dir=tmp_path / "data",
+        )
+        cfg.ensure_directories()
+
+        resolved = cfg.resolve_checkpoint_path("demo", path="nested/demo.pt")
+
+        assert resolved == (cfg.model_cache_dir / "nested" / "demo.pt").resolve(
+            strict=False
+        )
+
+    def test_checkpoint_path_escape_is_rejected(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(
+            model_cache_dir=tmp_path / "models",
+            data_cache_dir=tmp_path / "data",
+        )
+        cfg.ensure_directories()
+
+        with pytest.raises(ValueError):
+            cfg.resolve_checkpoint_path("demo", path="../escape.pt")
 
 
 class TestGetBackend:

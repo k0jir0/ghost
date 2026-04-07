@@ -86,10 +86,26 @@ class PyTorchOps:
     def __init__(self, context_manager: ContextManager):
         """Initialize PyTorch operations."""
         self.context_manager = context_manager
-        self.models: dict[str, nn.Module] = {}
-        self.optimizers: dict[str, optim.Optimizer] = {}
+        self.config = get_config()
+        runtime = self.context_manager.get_runtime_bucket("pytorch")
+        self.models: dict[str, nn.Module] = runtime.setdefault("models", {})
+        self.optimizers: dict[str, optim.Optimizer] = runtime.setdefault("optimizers", {})
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("pytorch_init", device=str(self._device))
+
+    def _ensure_synthetic_data_enabled(self, operation: str) -> None:
+        """Fail closed when the runtime would otherwise fabricate training data."""
+        if self.config.allow_synthetic_data:
+            return
+
+        raise RuntimeError(
+            f"{operation} requires a real dataset pipeline. "
+            "Set ALLOW_SYNTHETIC_DATA=true only for demo runs."
+        )
+
+    def _resolve_checkpoint_path(self, model_id: str, path: str | None = None) -> Path:
+        """Resolve checkpoint paths inside the configured model cache."""
+        return self.config.resolve_checkpoint_path(model_id, path, suffix=".pt")
 
     def _create_architecture(self, architecture: str, num_classes: int, input_shape: list[int]) -> nn.Module:
         """Create a model architecture."""
@@ -160,9 +176,12 @@ class PyTorchOps:
             model = self.models.get(model_id)
             if model is None:
                 return {"status": "error", "message": "Model not found"}
+
+            self._ensure_synthetic_data_enabled("Training")
             
             ctx = self.context_manager.get_context(model_id)
             if ctx:
+                ctx.metadata["data_mode"] = "synthetic"
                 ctx.update_state(ModelState.TRAINING)
                 self.context_manager.update_context(ctx)
             
@@ -205,6 +224,7 @@ class PyTorchOps:
                 "model_id": model_id,
                 "step": ctx.current_step if ctx else 1,
                 "loss": loss.item(),
+                "data_mode": "synthetic",
             }
         except Exception as e:
             logger.error("train_step_failed", model_id=model_id, error=str(e))
@@ -216,9 +236,12 @@ class PyTorchOps:
             model = self.models.get(model_id)
             if model is None:
                 return {"status": "error", "message": "Model not found"}
+
+            self._ensure_synthetic_data_enabled("Evaluation")
             
             ctx = self.context_manager.get_context(model_id)
             if ctx:
+                ctx.metadata["data_mode"] = "synthetic"
                 ctx.update_state(ModelState.EVALUATING)
                 self.context_manager.update_context(ctx)
             
@@ -239,6 +262,7 @@ class PyTorchOps:
                 "model_id": model_id,
                 "eval_loss": loss.item(),
                 "num_samples": 10,
+                "data_mode": "synthetic",
             }
         except Exception as e:
             logger.error("evaluate_failed", model_id=model_id, error=str(e))
@@ -255,8 +279,7 @@ class PyTorchOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
             
-            config = get_config()
-            save_path = Path(path) if path else config.model_cache_dir / f"{model_id}.pt"
+            save_path = self._resolve_checkpoint_path(model_id, path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
             
             torch.save({
@@ -284,7 +307,7 @@ class PyTorchOps:
     ) -> dict[str, Any]:
         """Load model checkpoint."""
         try:
-            checkpoint_path = Path(path)
+            checkpoint_path = self._resolve_checkpoint_path(model_id, path)
             if not checkpoint_path.exists():
                 return {"status": "error", "message": "Checkpoint not found"}
             

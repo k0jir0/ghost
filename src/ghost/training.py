@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from ghost.context import ContextManager, BackendType, ModelState, TrainingMetrics
-from ghost.config import get_config
 from ghost.health_monitor import HealthMonitor
 from ghost.logging import get_logger
 
@@ -63,6 +62,8 @@ class TrainingResult:
     effective_batch_size: int | None = None
     health_status: str = "unknown"
     health_issues: list[str] = field(default_factory=list)
+    data_mode: str = "unknown"
+    used_synthetic_data: bool = False
     error: str | None = None
 
 
@@ -73,13 +74,33 @@ class TrainingPipeline:
         self,
         context_manager: ContextManager | None = None,
         health_monitor: HealthMonitor | None = None,
+        backend_ops: dict[BackendType, BackendOps] | None = None,
     ):
         """Initialize training pipeline."""
         self.context_manager = context_manager or ContextManager()
         self.health_monitor = health_monitor or HealthMonitor()
+        self._backend_ops = backend_ops or {}
         self.active_trainings: dict[str, asyncio.Task[Any]] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         logger.info("training_pipeline_init")
+
+    def _get_ops(self, backend: BackendType) -> BackendOps:
+        """Return a cached backend ops instance for the selected backend."""
+        ops = self._backend_ops.get(backend)
+        if ops is not None:
+            return ops
+
+        if backend == BackendType.PYTORCH:
+            from ghost.pytorch_ops import PyTorchOps
+
+            ops = PyTorchOps(self.context_manager)
+        else:
+            from ghost.tensorflow_ops import TensorFlowOps
+
+            ops = TensorFlowOps(self.context_manager)
+
+        self._backend_ops[backend] = ops
+        return ops
 
     async def train(
         self,
@@ -104,6 +125,17 @@ class TrainingPipeline:
                 error="Model context not found. Create the model first.",
             )
 
+        if ctx.backend != config.backend:
+            return TrainingResult(
+                model_id=config.model_id,
+                success=False,
+                final_loss=0.0,
+                error=(
+                    f"Model context backend is {ctx.backend.value}, but training requested "
+                    f"{config.backend.value}."
+                ),
+            )
+
         ctx.update_state(ModelState.TRAINING)
         self.context_manager.update_context(ctx)
 
@@ -119,14 +151,7 @@ class TrainingPipeline:
         )
 
         try:
-            if config.backend == BackendType.PYTORCH:
-                from ghost.pytorch_ops import PyTorchOps
-
-                ops: BackendOps = PyTorchOps(self.context_manager)
-            else:
-                from ghost.tensorflow_ops import TensorFlowOps
-
-                ops = TensorFlowOps(self.context_manager)
+            ops = self._get_ops(config.backend)
 
             result = await self._run_training_loop(ops, config, stop_event)
 
@@ -179,6 +204,10 @@ class TrainingPipeline:
         current_batch_size = config.batch_size
         health_status = "healthy"
         health_issues: list[str] = []
+        latest_checkpoint_path: Path | None = None
+        data_mode = "unknown"
+        used_synthetic_data = False
+        encountered_error: str | None = None
 
         for epoch in range(config.epochs):
             if stop_event.is_set():
@@ -226,6 +255,9 @@ class TrainingPipeline:
                 )
 
                 if step_result.get("status") == "success":
+                    step_data_mode = str(step_result.get("data_mode", data_mode))
+                    data_mode = step_data_mode
+                    used_synthetic_data = used_synthetic_data or step_data_mode == "synthetic"
                     metric = TrainingMetrics(
                         epoch=epoch + 1,
                         step=len(metrics_history) + 1,
@@ -235,8 +267,26 @@ class TrainingPipeline:
                     )
                     epoch_metrics.append(metric)
                     metrics_history.append(metric)
+                else:
+                    encountered_error = str(
+                        step_result.get("message", "Training step failed")
+                    )
+                    logger.warning(
+                        "training_step_failed",
+                        model_id=config.model_id,
+                        epoch=epoch + 1,
+                        step=step + 1,
+                        error=encountered_error,
+                    )
+                    break
 
             if not epoch_metrics:
+                if stop_event.is_set():
+                    break
+
+                if encountered_error is not None:
+                    break
+
                 continue
 
             epochs_completed = epoch + 1
@@ -251,12 +301,23 @@ class TrainingPipeline:
 
             # Periodic checkpointing
             if epochs_completed % config.checkpoint_interval == 0:
-                await ops.save_checkpoint(config.model_id)
-                logger.info(
-                    "checkpoint_saved",
-                    model_id=config.model_id,
-                    epoch=epochs_completed,
-                )
+                checkpoint_result = await ops.save_checkpoint(config.model_id)
+                if checkpoint_result.get("status") == "success":
+                    checkpoint_value = checkpoint_result.get("path")
+                    if checkpoint_value:
+                        latest_checkpoint_path = Path(str(checkpoint_value))
+                    logger.info(
+                        "checkpoint_saved",
+                        model_id=config.model_id,
+                        epoch=epochs_completed,
+                    )
+                else:
+                    logger.warning(
+                        "checkpoint_save_failed",
+                        model_id=config.model_id,
+                        epoch=epochs_completed,
+                        error=checkpoint_result.get("message"),
+                    )
 
             # Early stopping
             if avg_loss < best_loss:
@@ -273,6 +334,9 @@ class TrainingPipeline:
                     )
                     break
 
+            if encountered_error is not None:
+                break
+
         # Update context with final epoch count
         ctx = self.context_manager.get_context(config.model_id)
         if ctx:
@@ -283,16 +347,53 @@ class TrainingPipeline:
         if metrics_history and metrics_history[-1].accuracy is not None:
             final_accuracy = metrics_history[-1].accuracy
 
+        if encountered_error is not None:
+            return TrainingResult(
+                model_id=config.model_id,
+                success=False,
+                final_loss=best_loss if best_loss != float("inf") else 0.0,
+                final_accuracy=final_accuracy,
+                epochs_completed=epochs_completed,
+                checkpoint_path=latest_checkpoint_path,
+                metrics_history=metrics_history,
+                effective_batch_size=current_batch_size,
+                health_status=health_status,
+                health_issues=health_issues,
+                data_mode=data_mode,
+                used_synthetic_data=used_synthetic_data,
+                error=encountered_error,
+            )
+
+        if not metrics_history:
+            return TrainingResult(
+                model_id=config.model_id,
+                success=False,
+                final_loss=0.0,
+                final_accuracy=None,
+                epochs_completed=0,
+                checkpoint_path=latest_checkpoint_path,
+                metrics_history=[],
+                effective_batch_size=current_batch_size,
+                health_status=health_status,
+                health_issues=health_issues,
+                data_mode=data_mode,
+                used_synthetic_data=used_synthetic_data,
+                error="Training produced no successful steps.",
+            )
+
         return TrainingResult(
             model_id=config.model_id,
             success=True,
             final_loss=best_loss if best_loss != float("inf") else 0.0,
             final_accuracy=final_accuracy,
             epochs_completed=epochs_completed,
+            checkpoint_path=latest_checkpoint_path,
             metrics_history=metrics_history,
             effective_batch_size=current_batch_size,
             health_status=health_status,
             health_issues=health_issues,
+            data_mode=data_mode,
+            used_synthetic_data=used_synthetic_data,
         )
 
     def stop_training(self, model_id: str) -> bool:
