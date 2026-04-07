@@ -124,16 +124,19 @@ jobs:
             || (cat bandit-report.json && exit 1)
 
       - name: pip-audit — dependency CVE scan
-        # Installs only lightweight deps; heavy ML packages are not installed
+        # Audit only the lightweight third-party dependencies used in CI.
+        # The local `ghost` package is not published on PyPI, so auditing the
+        # ambient environment would fail on the editable install itself.
         run: |
-          python -m pip install --no-deps -e .
-          python -m pip install \
-            "pydantic>=2.0.0" \
-            "pydantic-settings>=2.0.0" \
-            "psutil>=5.9.0" \
-            "structlog>=24.0.0" \
-            "python-dotenv>=1.0.0"
-          pip-audit --strict
+          cat > audit-requirements.txt <<'EOF'
+          pydantic>=2.0.0
+          pydantic-settings>=2.0.0
+          psutil>=5.9.0
+          structlog>=24.0.0
+          python-dotenv>=1.0.0
+          EOF
+          python -m pip install -r audit-requirements.txt
+          pip-audit --strict -r audit-requirements.txt
 
       - name: Upload Bandit report
         if: always()
