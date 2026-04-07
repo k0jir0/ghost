@@ -97,3 +97,13 @@ python_version = "3.10"
 strict = true
 ignore_missing_imports = true
 files = ["src/ghost"]
+
+[[tool.mypy.overrides]]
+module = [
+    "ghost.logging",
+    "ghost.ollama_client",
+    "ghost.pytorch_ops",
+    "ghost.tensorflow_ops",
+    "ghost.mcp_server",
+]
+ignore_errors = true

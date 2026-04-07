@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 def setup_logging(log_file: str | Path | None = None) -> None:
     """Configure structured logging for the application."""
     config = get_config()
-    
+
     log_level = getattr(logging, config.log_level.upper(), logging.INFO)
-    
+
     processors = [
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
@@ -30,10 +30,11 @@ def setup_logging(log_file: str | Path | None = None) -> None:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
         structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer() if not sys.stdout.isatty() 
-            else structlog.dev.ConsoleRenderer(colors=True),
+        structlog.processors.JSONRenderer()
+        if not sys.stdout.isatty()
+        else structlog.dev.ConsoleRenderer(colors=True),
     ]
-    
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -41,18 +42,18 @@ def setup_logging(log_file: str | Path | None = None) -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
-    
+
     handlers = [logging.StreamHandler(sys.stdout)]
-    
+
     if log_file:
         handlers.append(logging.FileHandler(log_file))
-    
+
     logging.basicConfig(
         format="%(message)s",
         level=log_level,
         handlers=handlers,
     )
-    
+
     for logger_name in ["urllib3", "requests", "matplotlib"]:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 

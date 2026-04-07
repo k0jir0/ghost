@@ -6,20 +6,21 @@ Tracks model state, training history, and provides context for MCP interactions.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
-from datetime import UTC, datetime
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 class ModelState(Enum):
     """Current state of a model."""
+
     INITIALIZED = "initialized"
     TRAINING = "training"
     EVALUATING = "evaluating"
@@ -30,6 +31,7 @@ class ModelState(Enum):
 
 class BackendType(Enum):
     """ML framework backend."""
+
     PYTORCH = "pytorch"
     TENSORFLOW = "tensorflow"
 
@@ -37,6 +39,7 @@ class BackendType(Enum):
 @dataclass
 class TrainingMetrics:
     """Training metrics snapshot."""
+
     epoch: int
     step: int
     loss: float
@@ -48,6 +51,7 @@ class TrainingMetrics:
 @dataclass
 class ModelContext:
     """Context information for a model."""
+
     model_id: str
     model_name: str
     backend: BackendType
@@ -78,7 +82,9 @@ class ModelContext:
         data = asdict(self)
         data["backend"] = self.backend.value
         data["state"] = self.state.value
-        data["checkpoint_path"] = str(self.checkpoint_path) if self.checkpoint_path else None
+        data["checkpoint_path"] = (
+            str(self.checkpoint_path) if self.checkpoint_path else None
+        )
         return data
 
     @classmethod
@@ -121,7 +127,7 @@ class ContextManager:
         """Load existing contexts from storage."""
         if not self.storage_path.exists():
             return
-        
+
         for ctx_file in self.storage_path.glob("*.json"):
             try:
                 data = json.loads(ctx_file.read_text())
@@ -147,7 +153,7 @@ class ContextManager:
         """Create a new model context."""
         if isinstance(backend, str):
             backend = BackendType(backend)
-        
+
         ctx = ModelContext(
             model_id=model_id,
             model_name=model_name,

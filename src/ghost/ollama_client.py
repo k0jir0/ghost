@@ -5,9 +5,8 @@ Provides integration with local Ollama LLM for training assistance and recommend
 
 from __future__ import annotations
 
-from typing import Any
-
 import asyncio
+from typing import Any
 
 import ollama
 
@@ -22,7 +21,7 @@ class OllamaClient:
 
     def __init__(self, host: str | None = None, model: str | None = None):
         """Initialize Ollama client.
-        
+
         Args:
             host: Ollama server URL (default from config)
             model: Default model name (default from config)
@@ -105,10 +104,11 @@ class OllamaClient:
             )
 
             response = await self.chat_async(user_prompt, system=system_prompt)
-            
+
             # Try to parse as JSON
             try:
                 import json
+
                 # Extract JSON from response
                 if "```json" in response:
                     json_str = response.split("```json")[1].split("```")[0]
@@ -120,7 +120,7 @@ class OllamaClient:
             except Exception:
                 # Return as text if JSON parsing fails
                 recommendations = {"recommendation": response}
-            
+
             return {
                 "status": "success",
                 "model": self.model,
@@ -164,9 +164,10 @@ class OllamaClient:
             )
 
             response = await self.chat_async(user_prompt, system=system_prompt)
-            
+
             try:
                 import json
+
                 if "```json" in response:
                     json_str = response.split("```json")[1].split("```")[0]
                 elif "```" in response:
@@ -176,7 +177,7 @@ class OllamaClient:
                 analysis = json.loads(json_str)
             except Exception:
                 analysis = {"analysis": response}
-            
+
             return {
                 "status": "success",
                 "analysis": analysis,
@@ -191,16 +192,16 @@ class OllamaClient:
         framework: str = "pytorch",
     ) -> str:
         """Generate training code snippet.
-        
+
         Args:
             task: Training task description
             framework: ML framework (pytorch or tensorflow)
-        
+
         Returns:
             Code snippet
         """
-        system_prompt = f"""You are an expert {framework} developer. Generate a clean, well-commented 
-training code snippet based on the task description. Include model creation, 
+        system_prompt = f"""You are an expert {framework} developer. Generate a clean, well-commented
+    training code snippet based on the task description. Include model creation,
 training loop, and evaluation. Use best practices."""
 
         user_prompt = f"""Generate {framework} training code for: {task}"""
@@ -209,7 +210,7 @@ training loop, and evaluation. Use best practices."""
 
     def check_connection(self) -> bool:
         """Check if Ollama server is reachable.
-        
+
         Returns:
             True if connection successful
         """

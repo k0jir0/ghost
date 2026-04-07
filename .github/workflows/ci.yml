@@ -46,6 +46,8 @@ jobs:
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
     strategy:
       fail-fast: false
       matrix:

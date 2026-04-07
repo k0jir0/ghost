@@ -5,8 +5,8 @@ Turns task descriptions and recommendation payloads into concrete training plans
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from ghost.config import GhostConfig, get_config
@@ -108,7 +108,9 @@ class TrainingPlanner:
             task=request.task,
             backend=self._select_backend(request.task, payload),
             architecture=self._infer_architecture(request.task, payload),
-            num_classes=self._coerce_positive_int(payload.get("num_classes"), 10, maximum=10_000),
+            num_classes=self._coerce_positive_int(
+                payload.get("num_classes"), 10, maximum=10_000
+            ),
             batch_size=self._coerce_positive_int(
                 payload.get("batch_size"),
                 self.config.default_batch_size,
@@ -123,7 +125,9 @@ class TrainingPlanner:
                 maximum=self.config.max_iterations,
             ),
             dataset=dataset,
-            optimizer=str(payload.get("optimizer")) if payload.get("optimizer") else None,
+            optimizer=str(payload.get("optimizer"))
+            if payload.get("optimizer")
+            else None,
             recommendation_source=recommendation_source,
             tips=[str(item) for item in tips],
             raw_recommendations=payload,
@@ -176,7 +180,9 @@ class TrainingPlanner:
             return default
         return min(parsed, maximum)
 
-    def _select_backend(self, task_text: str, recommendations: dict[str, Any]) -> BackendType:
+    def _select_backend(
+        self, task_text: str, recommendations: dict[str, Any]
+    ) -> BackendType:
         task_lower = task_text.lower()
         if "tensorflow" in task_lower or "keras" in task_lower:
             return BackendType.TENSORFLOW

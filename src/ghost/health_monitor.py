@@ -6,29 +6,35 @@ training pipeline and MCP layer can react before the process destabilizes.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
 import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 from ghost.config import GhostConfig, get_config
 
+psutil: Any | None
 try:
-    import psutil
+    import psutil as _psutil_module
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     psutil = None
+else:
+    psutil = _psutil_module
 
+torch: Any | None
 try:
-    import torch
+    import torch as _torch_module
 except ImportError:  # pragma: no cover - exercised when torch is absent
     torch = None
+else:
+    torch = _torch_module
 
 HealthStatus = Literal["healthy", "warning", "degraded"]
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -110,7 +116,10 @@ class HealthMonitor:
                 )
             )
 
-        if gpu_memory_ratio is not None and gpu_memory_ratio >= self.config.gpu_memory_threshold:
+        if (
+            gpu_memory_ratio is not None
+            and gpu_memory_ratio >= self.config.gpu_memory_threshold
+        ):
             issues.append(
                 HealthIssue(
                     severity="degraded",

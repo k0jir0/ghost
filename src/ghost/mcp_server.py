@@ -12,19 +12,19 @@ from typing import Any
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
-    Tool,
-    TextContent,
     CallToolResult,
     ListToolsResult,
+    TextContent,
+    Tool,
 )
 from pydantic import ValidationError
 
-from ghost.context import ContextManager, BackendType, ModelState
+from ghost.context import ContextManager
 from ghost.health_monitor import HealthMonitor
+from ghost.logging import get_logger
+from ghost.ollama_client import OllamaClient
 from ghost.pytorch_ops import PyTorchOps
 from ghost.tensorflow_ops import TensorFlowOps
-from ghost.ollama_client import OllamaClient
-from ghost.logging import get_logger
 from ghost.tool_catalog import ToolCatalog, ToolSpec
 
 logger = get_logger(__name__)
@@ -72,7 +72,9 @@ class GhostMCPServer:
         async def list_tools() -> ListToolsResult:
             """List available MCP tools."""
             return ListToolsResult(
-                tools=[self._spec_to_tool(spec) for spec in self.tool_catalog.list_specs()]
+                tools=[
+                    self._spec_to_tool(spec) for spec in self.tool_catalog.list_specs()
+                ]
             )
 
         @self.server.call_tool()
@@ -108,7 +110,9 @@ class GhostMCPServer:
                     isError=True,
                 )
 
-    async def _handle_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Route tool calls to appropriate handlers."""
         spec = self.tool_catalog.get_spec(name)
         if spec is None:
@@ -120,7 +124,9 @@ class GhostMCPServer:
 
         return await handler(arguments)
 
-    async def _handle_pytorch_create_model(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_pytorch_create_model(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.pytorch_ops.create_model(
             model_id=arguments["model_id"],
             model_name=arguments["model_name"],
@@ -129,29 +135,39 @@ class GhostMCPServer:
             input_shape=arguments.get("input_shape", [3, 224, 224]),
         )
 
-    async def _handle_pytorch_train_step(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_pytorch_train_step(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.pytorch_ops.train_step(
             model_id=arguments["model_id"],
             batch_size=arguments.get("batch_size", 32),
             learning_rate=arguments.get("learning_rate", 0.001),
         )
 
-    async def _handle_pytorch_evaluate(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_pytorch_evaluate(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.pytorch_ops.evaluate(arguments["model_id"])
 
-    async def _handle_pytorch_save_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_pytorch_save_checkpoint(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.pytorch_ops.save_checkpoint(
             model_id=arguments["model_id"],
             path=arguments.get("path"),
         )
 
-    async def _handle_pytorch_load_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_pytorch_load_checkpoint(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.pytorch_ops.load_checkpoint(
             model_id=arguments["model_id"],
             path=arguments["path"],
         )
 
-    async def _handle_tensorflow_create_model(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tensorflow_create_model(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.tensorflow_ops.create_model(
             model_id=arguments["model_id"],
             model_name=arguments["model_name"],
@@ -160,29 +176,39 @@ class GhostMCPServer:
             input_shape=arguments.get("input_shape", [224, 224, 3]),
         )
 
-    async def _handle_tensorflow_train_step(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tensorflow_train_step(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.tensorflow_ops.train_step(
             model_id=arguments["model_id"],
             batch_size=arguments.get("batch_size", 32),
             learning_rate=arguments.get("learning_rate", 0.001),
         )
 
-    async def _handle_tensorflow_evaluate(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tensorflow_evaluate(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.tensorflow_ops.evaluate(arguments["model_id"])
 
-    async def _handle_tensorflow_save_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tensorflow_save_checkpoint(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.tensorflow_ops.save_checkpoint(
             model_id=arguments["model_id"],
             path=arguments.get("path"),
         )
 
-    async def _handle_tensorflow_load_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_tensorflow_load_checkpoint(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.tensorflow_ops.load_checkpoint(
             model_id=arguments["model_id"],
             path=arguments["path"],
         )
 
-    async def _handle_get_training_status(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_get_training_status(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         ctx = self.context_manager.get_context(arguments["model_id"])
         if ctx:
             return {
@@ -207,16 +233,22 @@ class GhostMCPServer:
             ]
         }
 
-    async def _handle_get_system_health(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_get_system_health(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return self.health_monitor.get_health_report()
 
-    async def _handle_get_model_recommendation(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_get_model_recommendation(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         return await self.ollama_client.get_recommendation(
             task=arguments["task"],
             dataset=arguments.get("dataset", ""),
         )
 
-    async def _handle_get_training_analysis(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_get_training_analysis(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         ctx = self.context_manager.get_context(arguments["model_id"])
         if not ctx:
             return {"error": "Model not found"}

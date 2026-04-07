@@ -6,12 +6,13 @@ Unified training interface supporting both PyTorch and TensorFlow backends.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
-from ghost.context import ContextManager, BackendType, ModelState, TrainingMetrics
+from ghost.context import BackendType, ContextManager, ModelState, TrainingMetrics
 from ghost.health_monitor import HealthMonitor
 from ghost.logging import get_logger
 
@@ -19,7 +20,7 @@ logger = get_logger(__name__)
 
 
 def _utc_now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 class BackendOps(Protocol):
@@ -261,7 +262,9 @@ class TrainingPipeline:
                 if step_result.get("status") == "success":
                     step_data_mode = str(step_result.get("data_mode", data_mode))
                     data_mode = step_data_mode
-                    used_synthetic_data = used_synthetic_data or step_data_mode == "synthetic"
+                    used_synthetic_data = (
+                        used_synthetic_data or step_data_mode == "synthetic"
+                    )
                     metric = TrainingMetrics(
                         epoch=epoch + 1,
                         step=len(metrics_history) + 1,

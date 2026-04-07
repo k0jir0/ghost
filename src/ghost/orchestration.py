@@ -7,7 +7,7 @@ post-run analysis as a reusable application-layer service.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -80,7 +80,9 @@ class TrainingOrchestrator:
             ollama_client=self.ollama_client,
         )
         self.dataset_resolver = dataset_resolver or DatasetResolver(config=self.config)
-        self.training_pipeline = training_pipeline or TrainingPipeline(self.context_manager)
+        self.training_pipeline = training_pipeline or TrainingPipeline(
+            self.context_manager
+        )
         self._backend_ops = backend_ops or {
             BackendType.PYTORCH: PyTorchOps(self.context_manager),
             BackendType.TENSORFLOW: TensorFlowOps(self.context_manager),
@@ -160,7 +162,9 @@ class TrainingOrchestrator:
             record.status = "failed"
             record.error = str(exc)
             self._record_event(record, "run_failed", error=str(exc))
-            logger.error("training_orchestration_failed", run_id=record.run_id, error=str(exc))
+            logger.error(
+                "training_orchestration_failed", run_id=record.run_id, error=str(exc)
+            )
 
         self._persist(record)
         return record
@@ -262,12 +266,18 @@ class TrainingOrchestrator:
         ops = self._backend_ops[plan.backend]
         ctx = self.context_manager.get_context(record.model_id)
         models = getattr(ops, "models", None)
-        runtime_model_missing = isinstance(models, dict) and record.model_id not in models
+        runtime_model_missing = (
+            isinstance(models, dict) and record.model_id not in models
+        )
 
         if ctx is None or runtime_model_missing:
             create_result = await ops.create_model(
                 model_id=record.model_id,
-                model_name=model_name or record.request.model_name or record.request.task[:50] if record.request else record.model_id,
+                model_name=model_name
+                or record.request.model_name
+                or record.request.task[:50]
+                if record.request
+                else record.model_id,
                 architecture=plan.architecture,
                 num_classes=plan.num_classes,
             )
@@ -283,10 +293,16 @@ class TrainingOrchestrator:
             )
             ctx = self.context_manager.get_context(record.model_id)
 
-        if try_restore_checkpoint and ctx is not None and ctx.checkpoint_path is not None:
+        if (
+            try_restore_checkpoint
+            and ctx is not None
+            and ctx.checkpoint_path is not None
+        ):
             load_checkpoint = getattr(ops, "load_checkpoint", None)
             if callable(load_checkpoint):
-                load_result = await load_checkpoint(record.model_id, str(ctx.checkpoint_path))
+                load_result = await load_checkpoint(
+                    record.model_id, str(ctx.checkpoint_path)
+                )
                 if load_result.get("status") == "success":
                     self._record_event(
                         record,
@@ -357,4 +373,4 @@ class TrainingOrchestrator:
         self._records[record.run_id] = record
 
     def _generate_model_id(self) -> str:
-        return f"model_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+        return f"model_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"

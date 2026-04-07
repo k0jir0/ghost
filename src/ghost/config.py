@@ -5,6 +5,7 @@ Uses Pydantic settings for type-safe configuration with environment variable sup
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class GhostConfig(BaseSettings):
     """Main configuration for the Ghost platform.
-    
+
     Loads from environment variables with optional .env file support.
     """
 
@@ -27,98 +28,75 @@ class GhostConfig(BaseSettings):
 
     # Ollama Configuration
     ollama_host: str = Field(
-        default="http://localhost:11434",
-        description="Ollama server URL"
+        default="http://localhost:11434", description="Ollama server URL"
     )
     ollama_model: str = Field(
-        default="llama3",
-        description="Default Ollama model for assistance"
+        default="llama3", description="Default Ollama model for assistance"
     )
     ollama_timeout: int = Field(
-        default=60,
-        description="Ollama request timeout in seconds"
+        default=60, description="Ollama request timeout in seconds"
     )
 
     # Training Backend
     training_backend: Literal["pytorch", "tensorflow", "auto"] = Field(
-        default="auto",
-        description="Default ML backend for training"
+        default="auto", description="Default ML backend for training"
     )
     gpu_enabled: bool = Field(
-        default=True,
-        description="Enable GPU acceleration if available"
+        default=True, description="Enable GPU acceleration if available"
     )
-    cuda_visible_devices: str = Field(
-        default="0",
-        description="CUDA visible devices"
-    )
+    cuda_visible_devices: str = Field(default="0", description="CUDA visible devices")
 
     # Paths
     model_cache_dir: Path = Field(
-        default=Path("./models"),
-        description="Directory for model checkpoints"
+        default=Path("./models"), description="Directory for model checkpoints"
     )
     data_cache_dir: Path = Field(
-        default=Path("./data"),
-        description="Directory for dataset cache"
+        default=Path("./data"), description="Directory for dataset cache"
     )
 
     # Logging
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
-        default="INFO",
-        description="Logging level"
+        default="INFO", description="Logging level"
     )
-    log_file: str = Field(
-        default="ghost.log",
-        description="Log file path"
-    )
+    log_file: str = Field(default="ghost.log", description="Log file path")
 
     # Training Defaults
     default_batch_size: int = Field(
-        default=32,
-        description="Default batch size for training"
+        default=32, description="Default batch size for training"
     )
     default_learning_rate: float = Field(
-        default=0.001,
-        description="Default learning rate"
+        default=0.001, description="Default learning rate"
     )
     default_epochs: int = Field(
-        default=10,
-        description="Default number of training epochs"
+        default=10, description="Default number of training epochs"
     )
     checkpoint_interval: int = Field(
-        default=5,
-        description="Save checkpoint every N epochs"
+        default=5, description="Save checkpoint every N epochs"
     )
 
     # Agent Settings
     ai_backend: Literal["ollama"] = Field(
-        default="ollama",
-        description="AI backend for agent assistance"
+        default="ollama", description="AI backend for agent assistance"
     )
     max_iterations: int = Field(
-        default=100,
-        description="Maximum agent iterations before check-in"
+        default=100, description="Maximum agent iterations before check-in"
     )
     allow_synthetic_data: bool = Field(
         default=False,
         description=(
             "Allow demo-mode synthetic batches when no real data pipeline is configured"
-        )
+        ),
     )
 
     # Health Checks
     health_check_interval: int = Field(
-        default=30,
-        description="Health check interval in seconds"
+        default=30, description="Health check interval in seconds"
     )
     gpu_memory_threshold: float = Field(
-        default=0.9,
-        description="GPU memory usage threshold"
+        default=0.9, description="GPU memory usage threshold"
     )
     system_memory_threshold: float = Field(
-        default=0.85,
-        description="System memory usage threshold"
+        default=0.85, description="System memory usage threshold"
     )
 
     @field_validator("model_cache_dir", "data_cache_dir", mode="before")
@@ -162,9 +140,10 @@ class GhostConfig(BaseSettings):
         """Check if GPU is available for training."""
         if not self.gpu_enabled:
             return False
-        
+
         try:
             import torch
+
             return torch.cuda.is_available()
         except ImportError:
             return False
@@ -173,10 +152,12 @@ class GhostConfig(BaseSettings):
         """Get the effective training backend."""
         if self.training_backend == "auto":
             try:
-                import torch
-                return "pytorch"
+                torch_module = importlib.import_module("torch")
+                if torch_module is not None:
+                    return "pytorch"
             except ImportError:
-                return "tensorflow"
+                pass
+            return "tensorflow"
         return self.training_backend
 
 

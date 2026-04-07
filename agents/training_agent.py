@@ -7,18 +7,18 @@ Similar to Hephaestus agent pattern.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ghost.config import get_config
-from ghost.context import ContextManager, BackendType
+from ghost.context import BackendType, ContextManager
+from ghost.logging import get_logger, setup_logging
+from ghost.ollama_client import OllamaClient
 from ghost.planning import PlanningRequest, TrainingPlan, TrainingPlanner
 from ghost.pytorch_ops import PyTorchOps
 from ghost.tensorflow_ops import TensorFlowOps
 from ghost.training import TrainingPipeline
-from ghost.ollama_client import OllamaClient
-from ghost.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -99,7 +99,9 @@ class TrainingAgent:
                 if isinstance(analysis_payload, dict):
                     summary = analysis_payload.get("analysis", "No summary provided.")
                     suggestions = analysis_payload.get("suggestions", [])
-                    suggestion_text = ", ".join(str(item) for item in suggestions[:3]) or "None"
+                    suggestion_text = (
+                        ", ".join(str(item) for item in suggestions[:3]) or "None"
+                    )
                     last_analysis = (
                         f"- Status: {status}\n"
                         f"- Summary: {summary}\n"
@@ -111,7 +113,7 @@ class TrainingAgent:
             memory_content = f"""# Ghost Agent Memory
 
 ## Last Updated
-{datetime.now(UTC).isoformat()}
+{datetime.now(timezone.utc).isoformat()}
 
 ## Iterations
 {self._iteration_count}
@@ -246,7 +248,7 @@ This agent watches TASKS.md and executes training tasks autonomously.
             backend = plan.backend
 
             # Generate a timestamped model ID
-            model_id = f"model_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
+            model_id = f"model_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             model_name = task_text[:50]
 
             # --- Shift-left fix: create the model (context + weights) BEFORE
