@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -12,6 +13,7 @@ from ghost.context import ContextManager
 from ghost.data_validation import DatasetValidator
 from ghost.dataset_registry import DatasetRegistry
 from ghost.datasets import DatasetSpec
+from ghost.ingestion import DatasetIngestionService
 from ghost.logging import get_logger
 
 logger = get_logger(__name__)
@@ -41,15 +43,20 @@ class RealDatasetLoader:
         config: GhostConfig | None = None,
         dataset_registry: DatasetRegistry | None = None,
         dataset_validator: DatasetValidator | None = None,
+        ingestion_service: DatasetIngestionService | None = None,
     ):
         self.config = config or get_config()
         self.dataset_registry = dataset_registry or DatasetRegistry(config=self.config)
         self.dataset_validator = dataset_validator or DatasetValidator(config=self.config)
+        self.ingestion_service = ingestion_service or DatasetIngestionService(
+            config=self.config
+        )
         self._cache: dict[str, LoadedDataset] = {}
 
     def load(self, spec: DatasetSpec) -> LoadedDataset:
         """Return cached dataset arrays for a known non-synthetic dataset."""
-        cached = self._cache.get(spec.dataset_id)
+        cache_key = self._cache_key(spec)
+        cached = self._cache.get(cache_key)
         if spec.synthetic:
             raise ValueError(
                 "Synthetic dataset specs do not require real dataset loading."
@@ -60,20 +67,25 @@ class RealDatasetLoader:
             return cached
 
         self._ensure_cache_home()
+        source_uri = self.dataset_registry.source_uri_for_spec(spec)
 
-        if spec.dataset_id == "cifar-10":
+        if source_uri.startswith("builtin://") and spec.dataset_id == "cifar-10":
             dataset = self._load_cifar10()
-        elif spec.dataset_id == "mnist":
+        elif source_uri.startswith("builtin://") and spec.dataset_id == "mnist":
             dataset = self._load_mnist()
-        elif spec.dataset_id == "imdb-reviews":
+        elif source_uri.startswith("builtin://") and spec.dataset_id == "imdb-reviews":
             dataset = self._load_imdb_reviews(spec)
         else:
-            raise KeyError(f"Unsupported dataset id: {spec.dataset_id}")
+            dataset = self._load_ingested_dataset(spec)
 
-        self._cache[spec.dataset_id] = dataset
+        self._cache[cache_key] = dataset
         self._record_dataset_metadata(spec, dataset)
         logger.info("dataset_loaded", dataset_id=spec.dataset_id)
         return dataset
+
+    def _cache_key(self, spec: DatasetSpec) -> str:
+        version = self.dataset_registry.version_for_spec(spec)
+        return f"{spec.dataset_id}@{version}"
 
     def _record_dataset_metadata(
         self,
@@ -145,6 +157,32 @@ class RealDatasetLoader:
             ).astype("float32"),
             eval_labels=np.asarray(y_test, dtype="int64"),
         )
+
+    def _load_ingested_dataset(self, spec: DatasetSpec) -> LoadedDataset:
+        artifact = self.ingestion_service.ingest(spec)
+        return self._load_npz_bundle(artifact.local_path)
+
+    def _load_npz_bundle(self, path: Path) -> LoadedDataset:
+        with np.load(path, allow_pickle=False) as bundle:
+            required_keys = {
+                "train_features",
+                "train_labels",
+                "eval_features",
+                "eval_labels",
+            }
+            missing_keys = required_keys.difference(bundle.files)
+            if missing_keys:
+                missing = ", ".join(sorted(missing_keys))
+                raise ValueError(
+                    f"Dataset bundle is missing required arrays: {missing}"
+                )
+
+            return LoadedDataset(
+                train_features=np.asarray(bundle["train_features"], dtype=np.float32),
+                train_labels=np.asarray(bundle["train_labels"], dtype=np.int64),
+                eval_features=np.asarray(bundle["eval_features"], dtype=np.float32),
+                eval_labels=np.asarray(bundle["eval_labels"], dtype=np.int64),
+            )
 
 
 class DatasetBatchProvider:

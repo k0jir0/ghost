@@ -44,6 +44,7 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **Autonomous Training Agent** — Watches `TASKS.json` by default, exposes queue CRUD through MCP tools, and persists machine state in `AGENT.json`
 - **Recommendation-Driven Planning** — The agent uses Ollama recommendations to select architecture and training hyperparameters before execution
 - **Real Dataset Runtime** — CIFAR-10, MNIST, and IMDB-review datasets now flow through a shared cached loader and batch provider instead of synthetic-only scaffolding
+- **Governed Ingestion Interfaces** — `ingestion.py` now supports file-backed dataset bundles directly and object-store-backed bundles through a pluggable fetch callback, so external dataset specs can be versioned and loaded without hardcoding them into the runtime
 - **Shared Service Layer** — Planning, dataset resolution, orchestration, and tool-catalog modules keep the agent and MCP server aligned
 - **Experiment Tracking** — Searchable persisted run records and artifact lineage now sit alongside orchestration metadata
 - **Registry + Gates** — Evaluation thresholds, draft/staging/production registry stages, approval metadata, and audit logging gate model promotion
@@ -58,6 +59,7 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 ## Recent Progress
 
 - Dataset manifests, validation reports, searchable experiment runs, and artifact lineage are now persisted under the shared metadata store.
+- File-backed and object-store-backed dataset ingestion now feed external `.npz` dataset bundles through the same governed manifest and validation path as built-in datasets.
 - Models can now be evaluated, registered, promoted, rejected, and served from registry-managed versions.
 - Prediction traffic now records observability events, drift summaries, alerts, and drift-triggered retraining workflows.
 - The current regression baseline is the full green suite for the completed roadmap checkpoint.
@@ -142,6 +144,7 @@ ghost/
 │       ├── context.py            # Model context & state management
 │       ├── data_loading.py       # Real dataset loading and batch provisioning
 │       ├── datasets.py           # Dataset resolution and demo-mode policy
+│       ├── ingestion.py          # Filesystem and object-store dataset ingestion interfaces
 │       ├── health_monitor.py     # Resource monitoring and adaptive health checks
 │       ├── experiment_tracking.py# Searchable experiment lineage materialization
 │       ├── run_store.py          # Persistent experiment and artifact records

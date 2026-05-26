@@ -3,7 +3,7 @@ Date: 2026-05-26
 
 Completion Update
 - Phases 0 through 7 now have concrete Ghost-native implementations in the repository.
-- The current stack includes governed dataset metadata, experiment tracking, model evaluation and registry promotion, registry-backed inference, prediction observability and drift reporting, retraining workflow services, and lightweight auth/environment primitives.
+- The current stack includes governed dataset metadata, filesystem/object-store ingestion interfaces, experiment tracking, model evaluation and registry promotion, registry-backed inference, prediction observability and drift reporting, retraining workflow services, and lightweight auth/environment primitives.
 - Remaining future work is now about hardening and scaling these layers with external infrastructure, not about missing stack categories inside Ghost itself.
 
 Purpose
@@ -244,7 +244,7 @@ Suggested modules
 Success criteria
 - Every training run references an immutable dataset version and a validation report.
 Status
-- Completed with dataset manifests, validation reports, loader-side metadata persistence, and MCP inspection tools.
+- Completed with dataset manifests, validation reports, filesystem/object-store ingestion interfaces in `ingestion.py`, loader-side metadata persistence, and MCP inspection tools.
 
 Phase 2 - Add experiment tracking and lineage
 Goal

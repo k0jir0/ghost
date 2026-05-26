@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -94,3 +95,65 @@ def test_real_loader_persists_dataset_manifest_and_validation_report(tmp_path, m
     assert manifests[0]["dataset_id"] == "mnist"
     assert manifests[0]["validation_status"] == "passed"
     assert reports[0]["dataset_id"] == "mnist"
+
+
+def test_real_loader_ingests_file_backed_dataset_and_keeps_versions_separate(
+    tmp_path: Path,
+) -> None:
+    config = GhostConfig(
+        model_cache_dir=tmp_path / "models",
+        data_cache_dir=tmp_path / "data",
+    )
+    config.ensure_directories()
+    bundle_v1 = tmp_path / "dataset-v1.npz"
+    bundle_v2 = tmp_path / "dataset-v2.npz"
+    np.savez(
+        bundle_v1,
+        train_features=np.full((2, 2, 2, 1), 1.0, dtype=np.float32),
+        train_labels=np.array([0, 1], dtype=np.int64),
+        eval_features=np.full((1, 2, 2, 1), 2.0, dtype=np.float32),
+        eval_labels=np.array([1], dtype=np.int64),
+    )
+    np.savez(
+        bundle_v2,
+        train_features=np.full((2, 2, 2, 1), 9.0, dtype=np.float32),
+        train_labels=np.array([1, 0], dtype=np.int64),
+        eval_features=np.full((1, 2, 2, 1), 8.0, dtype=np.float32),
+        eval_labels=np.array([0], dtype=np.int64),
+    )
+    loader = RealDatasetLoader(config=config)
+    spec_v1 = DatasetSpec(
+        dataset_id="custom-images",
+        task_type="image-classification",
+        source="filesystem",
+        input_shape=(1, 2, 2),
+        num_classes=2,
+        synthetic=False,
+        metadata={
+            "source_uri": bundle_v1.resolve().as_uri(),
+            "dataset_version": "file-v1",
+        },
+    )
+    spec_v2 = DatasetSpec(
+        dataset_id="custom-images",
+        task_type="image-classification",
+        source="filesystem",
+        input_shape=(1, 2, 2),
+        num_classes=2,
+        synthetic=False,
+        metadata={
+            "source_uri": bundle_v2.resolve().as_uri(),
+            "dataset_version": "file-v2",
+        },
+    )
+
+    loaded_v1 = loader.load(spec_v1)
+    loaded_v2 = loader.load(spec_v2)
+    manifests = MetadataStore(config.data_cache_dir / "metadata").list_records(
+        "dataset-manifests"
+    )
+
+    assert loaded_v1.train_features[0, 0, 0, 0] == pytest.approx(1.0)
+    assert loaded_v2.train_features[0, 0, 0, 0] == pytest.approx(9.0)
+    assert len(manifests) == 2
+    assert {manifest["version"] for manifest in manifests} == {"file-v1", "file-v2"}

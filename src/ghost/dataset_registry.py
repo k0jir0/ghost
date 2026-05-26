@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from ghost.config import GhostConfig, get_config
 from ghost.datasets import DatasetSpec
+from ghost.ingestion import source_uri_for_spec
 from ghost.metadata_store import MetadataStore
 from ghost.schemas import DatasetManifest
 
@@ -31,6 +33,7 @@ class DatasetRegistry:
         metadata: dict[str, Any] | None = None,
     ) -> DatasetManifest:
         version = self.version_for_spec(spec)
+        source_uri = self.source_uri_for_spec(spec)
         record_id = self._record_id(spec.dataset_id, version)
         existing_payload = self.metadata_store.load_record("dataset-manifests", record_id)
         existing = (
@@ -42,7 +45,7 @@ class DatasetRegistry:
         manifest = DatasetManifest(
             dataset_id=spec.dataset_id,
             version=version,
-            source_uri=f"builtin://{spec.dataset_id}",
+            source_uri=source_uri,
             schema={
                 "task_type": spec.task_type,
                 "input_shape": list(spec.input_shape),
@@ -59,7 +62,7 @@ class DatasetRegistry:
             created_at=existing.created_at if existing is not None else DatasetManifest(
                 dataset_id=spec.dataset_id,
                 version=version,
-                source_uri=f"builtin://{spec.dataset_id}",
+                source_uri=source_uri,
             ).created_at,
         )
         self.metadata_store.save_record(
@@ -91,7 +94,20 @@ class DatasetRegistry:
         metadata_version = spec.metadata.get("dataset_version") if isinstance(spec.metadata, dict) else None
         if metadata_version:
             return str(metadata_version)
-        return "builtin-v1"
+
+        source_uri = self.source_uri_for_spec(spec)
+        if source_uri.startswith("builtin://"):
+            return "builtin-v1"
+        return f"uri-{hashlib.sha256(source_uri.encode('utf-8')).hexdigest()[:12]}"
+
+    def source_uri_for_spec(self, spec: DatasetSpec) -> str:
+        if spec.source == "builtin-catalog":
+            return f"builtin://{spec.dataset_id}"
+
+        try:
+            return source_uri_for_spec(spec)
+        except ValueError:
+            return f"{spec.source}://{spec.dataset_id}"
 
     def _record_id(self, dataset_id: str, version: str) -> str:
         safe_dataset = dataset_id.replace("/", "-")
