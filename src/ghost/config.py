@@ -53,6 +53,14 @@ class GhostConfig(BaseSettings):
     data_cache_dir: Path = Field(
         default=Path("./data"), description="Directory for dataset cache"
     )
+    task_queue_file: Path = Field(
+        default=Path("./TASKS.json"),
+        description="Primary task queue file for the autonomous training agent",
+    )
+    agent_state_file: Path = Field(
+        default=Path("./AGENT.json"),
+        description="Object-backed runtime state file for the autonomous training agent",
+    )
 
     # Logging
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
@@ -99,7 +107,13 @@ class GhostConfig(BaseSettings):
         default=0.85, description="System memory usage threshold"
     )
 
-    @field_validator("model_cache_dir", "data_cache_dir", mode="before")
+    @field_validator(
+        "model_cache_dir",
+        "data_cache_dir",
+        "task_queue_file",
+        "agent_state_file",
+        mode="before",
+    )
     @classmethod
     def resolve_path(cls, v: str | Path) -> Path:
         """Convert string paths to Path objects."""

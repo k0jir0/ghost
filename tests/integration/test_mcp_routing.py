@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ghost.context import BackendType, ContextManager, TrainingMetrics
+from ghost.task_queue import TaskQueueStore
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +19,7 @@ from ghost.context import BackendType, ContextManager, TrainingMetrics
 def _make_server(tmp_data_dir: Path) -> Any:
     """Build a GhostMCPServer with mocked ML backends and Ollama."""
     cm = ContextManager(storage_path=tmp_data_dir)
+    task_queue = TaskQueueStore(tmp_data_dir / "TASKS.json")
 
     pytorch_ops = MagicMock()
     tensorflow_ops = MagicMock()
@@ -88,12 +90,14 @@ def _make_server(tmp_data_dir: Path) -> Any:
             context_manager=cm,
             ollama_client=ollama_client,
             health_monitor=health_monitor,
+            task_queue=task_queue,
         )
         # Inject mocked ops directly
         server.pytorch_ops = pytorch_ops
         server.tensorflow_ops = tensorflow_ops
         server.ollama_client = ollama_client
         server.health_monitor = health_monitor
+        server.task_queue = task_queue
 
     return server, cm, pytorch_ops, tensorflow_ops, ollama_client, health_monitor
 
@@ -258,6 +262,83 @@ class TestContextTools:
         assert "error" in result
 
 
+class TestTaskQueueTools:
+    @pytest.mark.asyncio
+    async def test_create_training_task_writes_to_json_queue(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+
+        result = await server._handle_tool(
+            "create_training_task",
+            {"text": "Train MLP classifier"},
+        )
+
+        assert result["status"] == "success"
+        assert result["task"]["text"] == "Train MLP classifier"
+        assert result["format"] == "json"
+
+    @pytest.mark.asyncio
+    async def test_list_training_tasks_returns_queue_contents(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        await server._handle_tool("create_training_task", {"text": "Train MLP"})
+
+        result = await server._handle_tool("list_training_tasks", {})
+
+        assert len(result["queue"]) == 1
+        assert result["queue"][0]["text"] == "Train MLP"
+
+    @pytest.mark.asyncio
+    async def test_update_training_task_can_mark_completed(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        created = await server._handle_tool(
+            "create_training_task",
+            {"text": "Train MLP"},
+        )
+
+        result = await server._handle_tool(
+            "update_training_task",
+            {"task_id": created["task"]["task_id"], "completed": True},
+        )
+
+        assert result["status"] == "success"
+        assert result["task"]["completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_delete_training_task_removes_item(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        created = await server._handle_tool(
+            "create_training_task",
+            {"text": "Train MLP"},
+        )
+
+        result = await server._handle_tool(
+            "delete_training_task",
+            {"task_id": created["task"]["task_id"]},
+        )
+
+        assert result["status"] == "success"
+        remaining = await server._handle_tool("list_training_tasks", {})
+        assert remaining["queue"] == []
+
+
+class TestCallToolResultShape:
+    def test_call_tool_result_uses_structured_content(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+
+        result = server._call_tool_result({"status": "success", "model_id": "m1"})
+
+        assert result["structuredContent"] == {
+            "status": "success",
+            "model_id": "m1",
+        }
+        assert result["content"] == []
+
+
 # ---------------------------------------------------------------------------
 # Pydantic input validation (shift-left boundary enforcement)
 # ---------------------------------------------------------------------------
@@ -350,8 +431,24 @@ class TestPydanticValidation:
         exc = self._validate("get_training_analysis", {})
         assert exc is not None
 
+    def test_update_training_task_requires_target(self) -> None:
+        exc = self._validate("update_training_task", {"completed": True})
+        assert exc is not None
+
+    def test_update_training_task_requires_change(self) -> None:
+        exc = self._validate("update_training_task", {"task_id": "abc"})
+        assert exc is not None
+
+    def test_delete_training_task_requires_target(self) -> None:
+        exc = self._validate("delete_training_task", {})
+        assert exc is not None
+
     def test_list_models_accepts_empty_args(self) -> None:
         exc = self._validate("list_models", {})
+        assert exc is None
+
+    def test_list_training_tasks_accepts_empty_args(self) -> None:
+        exc = self._validate("list_training_tasks", {})
         assert exc is None
 
     def test_get_system_health_accepts_empty_args(self) -> None:

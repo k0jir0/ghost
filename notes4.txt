@@ -1,0 +1,96 @@
+Ghost Progress Notes - 2026-05-26
+
+Summary
+- Shifted Ghost from partial scaffold behavior toward a more runtime-faithful training path.
+- Replaced markdown/text as the primary machine-managed state format where object-backed storage was the better engineering choice.
+- Finished the open implementation and documentation work, then verified the full regression suite.
+
+Major Changes
+
+1. Real dataset runtime wiring
+- Added src/ghost/data_loading.py.
+- Introduced RealDatasetLoader for cached loading of CIFAR-10, MNIST, and IMDB reviews through the local data cache.
+- Introduced DatasetBatchProvider so backend train/eval paths can consume repeatable real batches from resolved dataset metadata.
+- Updated dataset resolution/planning/orchestration so dataset specs and backend-specific input shapes are carried through to real model creation and training.
+- PyTorch and TensorFlow backend ops now switch to real dataset batches when dataset metadata is present.
+
+2. TensorFlow architecture correction
+- Reworked the TensorFlow ResNet path so residual blocks use projection shortcuts where required.
+- This removed the broken resnet18/resnet50 shape path that previously failed at runtime.
+
+3. Agent state and task queue object migration
+- Machine-managed agent state now persists to AGENT.json instead of AGENT.md.
+- Added src/ghost/task_queue.py as the shared queue store.
+- The autonomous agent now defaults to TASKS.json as its primary queue file.
+- Legacy markdown task files are still supported when explicitly used, but they are no longer the primary runtime path.
+- TASKS.md in the repo was repurposed as a legacy note instead of an active default queue.
+- Added TASKS.json as the default object-backed task queue artifact.
+
+4. MCP transport and queue tools
+- MCP tool responses now use CallToolResult.structuredContent instead of stringifying result dictionaries into text.
+- Added MCP task queue CRUD tools:
+  - list_training_tasks
+  - create_training_task
+  - update_training_task
+  - delete_training_task
+- These tools share the same TaskQueueStore implementation used by the autonomous training agent, so queue semantics are consistent across runtime entry points.
+
+5. Configuration and documentation
+- Added config fields for TASK_QUEUE_FILE and AGENT_STATE_FILE.
+- Updated README.md to reflect:
+  - data_loading.py and task_queue.py in the architecture and project structure
+  - JSON-first task queue and AGENT.json state
+  - MCP task queue CRUD tools
+  - structuredContent MCP responses
+  - current regression baseline
+- Updated .env.example to include TASK_QUEUE_FILE and AGENT_STATE_FILE.
+- Removed the stale checked-in AGENT.md file.
+
+Testing and Validation
+- Added or extended focused tests for:
+  - data loading and batch provisioning
+  - config path defaults for queue/state files
+  - task queue JSON/markdown behavior
+  - training agent JSON queue behavior and JSON state writes
+  - MCP routing for structuredContent and task queue CRUD tools
+  - tool catalog coverage for new queue tools
+- Final test result for the repository:
+  - 182 passed
+
+Notable Engineering Outcomes
+- Dataset resolution now influences actual runtime behavior instead of stopping at metadata.
+- The agent and MCP server now share a single task queue abstraction instead of maintaining separate queue logic.
+- Machine-managed Ghost state is now object-backed by default, which improves fidelity, validation, and downstream integration.
+- The repo now documents its current runtime shape more accurately than it did at the start of the day.
+
+Files Added Today
+- src/ghost/data_loading.py
+- src/ghost/task_queue.py
+- tests/unit/test_data_loading.py
+- tests/unit/test_task_queue.py
+- TASKS.json
+- notes4.txt
+
+Files Updated Today
+- README.md
+- .env.example
+- TASKS.md
+- agents/training_agent.py
+- src/ghost/config.py
+- src/ghost/datasets.py
+- src/ghost/mcp_server.py
+- src/ghost/orchestration.py
+- src/ghost/planning.py
+- src/ghost/pytorch_ops.py
+- src/ghost/tensorflow_ops.py
+- src/ghost/tool_catalog.py
+- tests/integration/test_mcp_routing.py
+- tests/unit/test_config.py
+- tests/unit/test_datasets.py
+- tests/unit/test_orchestration.py
+- tests/unit/test_tool_catalog.py
+- tests/unit/test_training.py
+- tests/unit/test_training_agent.py
+
+Files Removed Today
+- AGENT.md

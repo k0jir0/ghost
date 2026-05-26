@@ -22,6 +22,10 @@ def test_default_catalog_contains_all_current_tools() -> None:
         "tensorflow_load_checkpoint",
         "get_training_status",
         "list_models",
+        "list_training_tasks",
+        "create_training_task",
+        "update_training_task",
+        "delete_training_task",
         "get_system_health",
         "get_model_recommendation",
         "get_training_analysis",
@@ -44,3 +48,14 @@ def test_catalog_exposes_handler_metadata() -> None:
     assert spec is not None
     assert spec.handler_name == "_handle_get_training_analysis"
     assert "analysis" in spec.tags
+
+
+def test_update_training_task_schema_requires_target_and_change_fields() -> None:
+    catalog = ToolCatalog.default()
+    spec = catalog.get_spec("update_training_task")
+
+    assert spec is not None
+    schema = spec.input_schema()
+    assert "task_id" in schema["properties"]
+    assert "match_text" in schema["properties"]
+    assert "completed" in schema["properties"]

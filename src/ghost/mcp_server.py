@@ -14,16 +14,17 @@ from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolResult,
     ListToolsResult,
-    TextContent,
     Tool,
 )
 from pydantic import ValidationError
 
+from ghost.config import get_config
 from ghost.context import ContextManager
 from ghost.health_monitor import HealthMonitor
 from ghost.logging import get_logger
 from ghost.ollama_client import OllamaClient
 from ghost.pytorch_ops import PyTorchOps
+from ghost.task_queue import TaskQueueStore
 from ghost.tensorflow_ops import TensorFlowOps
 from ghost.tool_catalog import ToolCatalog, ToolSpec
 
@@ -46,14 +47,17 @@ class GhostMCPServer:
         context_manager: ContextManager | None = None,
         ollama_client: OllamaClient | None = None,
         health_monitor: HealthMonitor | None = None,
+        task_queue: TaskQueueStore | None = None,
     ):
         """Initialize the MCP server."""
         self.server = Server("ghost-mcp")
+        self.config = get_config()
         self.context_manager = context_manager or ContextManager()
         self.ollama_client = ollama_client or OllamaClient()
         self.health_monitor = health_monitor or HealthMonitor()
         self.pytorch_ops = PyTorchOps(self.context_manager)
         self.tensorflow_ops = TensorFlowOps(self.context_manager)
+        self.task_queue = task_queue or TaskQueueStore(self.config.task_queue_file)
         self.tool_catalog = _DEFAULT_TOOL_CATALOG
 
         self._register_tools()
@@ -63,6 +67,18 @@ class GhostMCPServer:
             name=spec.name,
             description=spec.description,
             inputSchema=spec.input_schema(),
+        )
+
+    def _call_tool_result(
+        self,
+        payload: dict[str, Any],
+        *,
+        is_error: bool = False,
+    ) -> CallToolResult:
+        return CallToolResult(
+            content=[],
+            structuredContent=payload,
+            isError=is_error,
         )
 
     def _register_tools(self) -> None:
@@ -83,31 +99,33 @@ class GhostMCPServer:
             # --- Shift-left: validate arguments before any business logic ---
             spec = self.tool_catalog.get_spec(name)
             if spec is None:
-                return CallToolResult(
-                    content=[TextContent(type="text", text=f"Unknown tool: {name}")],
-                    isError=True,
+                return self._call_tool_result(
+                    {"error": {"message": f"Unknown tool: {name}", "tool": name}},
+                    is_error=True,
                 )
             try:
                 spec.input_model.model_validate(arguments or {})
             except ValidationError as exc:
-                error_msg = f"Invalid arguments for '{name}': {exc.errors()}"
                 logger.warning("tool_validation_error", tool=name, errors=exc.errors())
-                return CallToolResult(
-                    content=[TextContent(type="text", text=error_msg)],
-                    isError=True,
+                return self._call_tool_result(
+                    {
+                        "error": {
+                            "message": f"Invalid arguments for '{name}'",
+                            "tool": name,
+                            "details": exc.errors(),
+                        }
+                    },
+                    is_error=True,
                 )
 
             try:
                 result = await self._handle_tool(name, arguments or {})
-                return CallToolResult(
-                    content=[TextContent(type="text", text=str(result))],
-                    isError=False,
-                )
-            except Exception as e:
-                logger.error("tool_error", tool=name, error=str(e))
-                return CallToolResult(
-                    content=[TextContent(type="text", text=f"Error: {str(e)}")],
-                    isError=True,
+                return self._call_tool_result(result)
+            except Exception as exc:
+                logger.error("tool_error", tool=name, error=str(exc))
+                return self._call_tool_result(
+                    {"error": {"message": str(exc), "tool": name}},
+                    is_error=True,
                 )
 
     async def _handle_tool(
@@ -231,6 +249,67 @@ class GhostMCPServer:
                 }
                 for ctx in contexts
             ]
+        }
+
+    async def _handle_list_training_tasks(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        tasks = self.task_queue.list_tasks(
+            include_completed=arguments.get("include_completed", False)
+        )
+        return {
+            "queue": [task.to_dict() for task in tasks],
+            "path": str(self.task_queue.path),
+            "active_path": str(self.task_queue.active_path()),
+            "format": self.task_queue.active_format(),
+        }
+
+    async def _handle_create_training_task(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        task = self.task_queue.add_task(
+            arguments["text"],
+            task_id=arguments.get("task_id"),
+        )
+        return {
+            "status": "success",
+            "task": task.to_dict(),
+            "path": str(self.task_queue.path),
+            "format": self.task_queue.active_format(),
+        }
+
+    async def _handle_update_training_task(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        task = self.task_queue.update_task(
+            task_id=arguments.get("task_id"),
+            match_text=arguments.get("match_text"),
+            text=arguments.get("text"),
+            completed=arguments.get("completed"),
+        )
+        if task is None:
+            return {"error": "Task not found"}
+        return {
+            "status": "success",
+            "task": task.to_dict(),
+            "path": str(self.task_queue.path),
+            "format": self.task_queue.active_format(),
+        }
+
+    async def _handle_delete_training_task(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        task = self.task_queue.delete_task(
+            task_id=arguments.get("task_id"),
+            match_text=arguments.get("match_text"),
+        )
+        if task is None:
+            return {"error": "Task not found"}
+        return {
+            "status": "success",
+            "task": task.to_dict(),
+            "path": str(self.task_queue.path),
+            "format": self.task_queue.active_format(),
         }
 
     async def _handle_get_system_health(

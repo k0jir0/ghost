@@ -33,6 +33,14 @@ class TestGhostConfigDefaults:
         cfg = GhostConfig()
         assert isinstance(cfg.data_cache_dir, Path)
 
+    def test_task_queue_file_is_path(self) -> None:
+        cfg = GhostConfig()
+        assert isinstance(cfg.task_queue_file, Path)
+
+    def test_agent_state_file_is_path(self) -> None:
+        cfg = GhostConfig()
+        assert isinstance(cfg.agent_state_file, Path)
+
     def test_default_batch_size(self) -> None:
         cfg = GhostConfig()
         assert cfg.default_batch_size == 32
@@ -92,6 +100,14 @@ class TestResolvePath:
     def test_string_data_cache_coerced(self, tmp_path: Path) -> None:
         cfg = GhostConfig(data_cache_dir=str(tmp_path / "data"))  # type: ignore[arg-type]
         assert isinstance(cfg.data_cache_dir, Path)
+
+    def test_string_task_queue_file_coerced(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(task_queue_file=str(tmp_path / "TASKS.json"))  # type: ignore[arg-type]
+        assert isinstance(cfg.task_queue_file, Path)
+
+    def test_string_agent_state_file_coerced(self, tmp_path: Path) -> None:
+        cfg = GhostConfig(agent_state_file=str(tmp_path / "AGENT.json"))  # type: ignore[arg-type]
+        assert isinstance(cfg.agent_state_file, Path)
 
 
 class TestEnsureDirectories:

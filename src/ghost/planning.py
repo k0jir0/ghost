@@ -15,6 +15,13 @@ from ghost.ollama_client import OllamaClient
 from ghost.training import TrainingConfig
 
 _SUPPORTED_ARCHITECTURES = {"mlp", "resnet18", "resnet50", "custom"}
+_DATASET_ALIASES = (
+    ("cifar-10", "cifar-10"),
+    ("cifar10", "cifar-10"),
+    ("mnist", "mnist"),
+    ("imdb reviews", "imdb-reviews"),
+    ("imdb", "imdb-reviews"),
+)
 
 
 @dataclass
@@ -141,6 +148,11 @@ class TrainingPlanner:
         return payload if isinstance(payload, dict) else {}
 
     def _infer_dataset(self, task_text: str) -> str:
+        task_lower = task_text.lower()
+        for alias, dataset_id in _DATASET_ALIASES:
+            if alias in task_lower:
+                return dataset_id
+
         match = re.search(r"\bon\s+([^,]+)", task_text, flags=re.IGNORECASE)
         if not match:
             return ""

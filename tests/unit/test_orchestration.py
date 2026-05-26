@@ -129,6 +129,7 @@ class TestTrainingOrchestrator:
             allow_synthetic=False,
         )
         pytorch_ops.create_model.assert_awaited_once()
+        assert pytorch_ops.create_model.await_args.kwargs["input_shape"] == [3, 32, 32]
         training_pipeline.train.assert_awaited_once()
         ollama_client.analyze_training_progress.assert_awaited_once()
         assert any(event["stage"] == "dataset_resolved" for event in record.events)

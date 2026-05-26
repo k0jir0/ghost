@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ghost.context import BackendType, ContextManager, ModelState
+from ghost.datasets import DatasetSpec
 from ghost.health_monitor import HealthIssue, ResourceSnapshot
 from ghost.training import TrainingConfig, TrainingPipeline, TrainingResult
 
@@ -372,3 +373,36 @@ class TestTrainingPipelineLoop:
 
         assert result.success is True
         assert result.epochs_completed == 1
+
+
+def test_pytorch_real_batch_helper_returns_input_target_and_spec(
+    tmp_data_dir: Path,
+) -> None:
+    from ghost.pytorch_ops import PyTorchOps
+
+    context_manager = ContextManager(storage_path=tmp_data_dir)
+    ops = PyTorchOps(context_manager)
+    spec = DatasetSpec(
+        dataset_id="mnist",
+        task_type="image-classification",
+        source="builtin-catalog",
+        input_shape=(1, 28, 28),
+        num_classes=10,
+        synthetic=False,
+    )
+    ops._batch_provider = MagicMock()
+    ops._batch_provider.next_training_batch.return_value = (
+        "features",
+        "labels",
+        spec,
+    )
+    ops._torch_batch = MagicMock(return_value=("batch-input", "batch-target"))
+
+    batch_input, batch_target, returned_spec = ops._next_real_training_batch(
+        "model-1",
+        8,
+    )
+
+    assert batch_input == "batch-input"
+    assert batch_target == "batch-target"
+    assert returned_spec is spec

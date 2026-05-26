@@ -1,8 +1,7 @@
 """Dataset catalog and resolution for Ghost.
 
-This module provides a stable boundary between high-level planning and the
-eventual data-loading pipeline. For now it focuses on catalog metadata,
-resolution, and explicit synthetic-data controls.
+This module provides dataset metadata, alias resolution, and backend-aware
+shape normalization for the Ghost runtime.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ghost.config import GhostConfig, get_config
+from ghost.context import BackendType
 
 
 @dataclass
@@ -120,10 +120,11 @@ class DatasetResolver:
                 aliases=("imdb",),
                 task_type="text-classification",
                 source="builtin-catalog",
-                input_shape=(1,),
+                input_shape=(256,),
                 num_classes=2,
                 synthetic=False,
                 description="Binary sentiment analysis benchmark.",
+                metadata={"sequence_length": 256, "vocab_size": 20000},
             ),
             DatasetSpec(
                 dataset_id="synthetic-image-classification",
@@ -146,3 +147,14 @@ class DatasetResolver:
                 description="Synthetic text batches for demo-mode training.",
             ),
         ]
+
+
+def dataset_input_shape(
+    spec: DatasetSpec,
+    backend: BackendType,
+) -> tuple[int, ...]:
+    """Return the dataset shape in the layout expected by the selected backend."""
+    if backend == BackendType.TENSORFLOW and len(spec.input_shape) == 3:
+        channels, height, width = spec.input_shape
+        return (height, width, channels)
+    return spec.input_shape

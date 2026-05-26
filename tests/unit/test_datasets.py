@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from ghost.config import GhostConfig, reset_config
-from ghost.datasets import DatasetResolver
+from ghost.context import BackendType
+from ghost.datasets import DatasetResolver, dataset_input_shape
 
 
 @pytest.fixture()
@@ -56,3 +57,10 @@ class TestDatasetResolver:
     ) -> None:
         with pytest.raises(KeyError, match="Unknown dataset reference"):
             dataset_resolver.resolve("unknown-dataset", allow_synthetic=False)
+
+    def test_dataset_input_shape_reorders_for_tensorflow(
+        self,
+        dataset_resolver: DatasetResolver,
+    ) -> None:
+        spec = dataset_resolver.resolve("mnist", allow_synthetic=False)
+        assert dataset_input_shape(spec, BackendType.TENSORFLOW) == (28, 28, 1)

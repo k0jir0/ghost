@@ -9,13 +9,15 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 │                      GHOST PLATFORM                         │
 ├─────────────────────────────────────────────────────────────┤
 │  Agent + MCP Entry Points                                   │
-│  ├── TrainingAgent (TASKS.md automation)                    │
+│  ├── TrainingAgent (TASKS.json queue, AGENT.json state)     │
 │  └── GhostMCPServer (tool transport + dispatch)             │
 ├─────────────────────────────────────────────────────────────┤
 │  Application Services                                       │
 │  ├── planning.py        (recommendation-driven plans)       │
 │  ├── datasets.py        (dataset resolution + demo gating)  │
+│  ├── data_loading.py    (real dataset loading + batching)   │
 │  ├── orchestration.py   (run execution + resume flow)       │
+│  ├── task_queue.py      (shared JSON/markdown task store)   │
 │  ├── tool_catalog.py    (transport-independent tool specs)  │
 │  └── health_monitor.py  (resource-aware training signals)   │
 ├─────────────────────────────────────────────────────────────┤
@@ -36,13 +38,21 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **Dual Framework Support** — Seamless PyTorch and TensorFlow integration with a unified API
 - **MCP Protocol** — Standardized tool interface for AI model interactions via `GhostMCPServer`
 - **Local LLM** — Ollama integration for private, offline inference and model recommendations
-- **Autonomous Training Agent** — Watches `TASKS.md` and executes training tasks automatically
+- **Autonomous Training Agent** — Watches `TASKS.json` by default, exposes queue CRUD through MCP tools, and persists machine state in `AGENT.json`
 - **Recommendation-Driven Planning** — The agent uses Ollama recommendations to select architecture and training hyperparameters before execution
+- **Real Dataset Runtime** — CIFAR-10, MNIST, and IMDB-review datasets now flow through a shared cached loader and batch provider instead of synthetic-only scaffolding
 - **Shared Service Layer** — Planning, dataset resolution, orchestration, and tool-catalog modules keep the agent and MCP server aligned
 - **Explicit Demo Mode** — Synthetic training and evaluation data is disabled by default and must be opted into for scaffold/demo runs
 - **Health Monitoring** — GPU, memory, and cache monitoring with configurable thresholds
 - **Graceful Degradation** — Memory pressure automatically reduces training batch size before the run escalates
 - **Type-Safe Config** — Pydantic-based `GhostConfig` with `.env` file support
+
+## Recent Progress
+
+- Real dataset wiring now resolves dataset specs into backend-ready input shapes and feeds repeatable batches to both PyTorch and TensorFlow backends through `data_loading.py`.
+- The autonomous agent now stores machine-managed state in `AGENT.json`, defaults its queue to `TASKS.json`, and shares queue semantics with the MCP layer through `task_queue.py`.
+- MCP tool responses now use `structuredContent`, preserving object payloads instead of stringifying dictionaries into text.
+- The current regression baseline is `182 passed` across architecture, integration, and unit tests.
 
 ## Quick Start
 
@@ -85,6 +95,8 @@ cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 # LOG_LEVEL=INFO
 # MODEL_CACHE_DIR=./models
 # DATA_CACHE_DIR=./data
+# TASK_QUEUE_FILE=./TASKS.json
+# AGENT_STATE_FILE=./AGENT.json
 # ALLOW_SYNTHETIC_DATA=false    # set true only for demo/scaffold runs
 ```
 
@@ -117,6 +129,7 @@ ghost/
 │       ├── __init__.py           # Public package exports
 │       ├── config.py             # Pydantic-based configuration (GhostConfig)
 │       ├── context.py            # Model context & state management
+│       ├── data_loading.py       # Real dataset loading and batch provisioning
 │       ├── datasets.py           # Dataset resolution and demo-mode policy
 │       ├── health_monitor.py     # Resource monitoring and adaptive health checks
 │       ├── logging.py            # Structured logging setup
@@ -125,6 +138,7 @@ ghost/
 │       ├── orchestration.py      # Training execution and resume coordination
 │       ├── planning.py           # Recommendation-driven training plan creation
 │       ├── pytorch_ops.py        # PyTorch MCP tool implementations
+│       ├── task_queue.py         # Shared JSON-first task queue storage
 │       ├── tensorflow_ops.py     # TensorFlow/Keras MCP tool implementations
 │       ├── tool_catalog.py       # Transport-independent MCP tool registry
 │       └── training.py           # Unified training pipeline
@@ -135,8 +149,9 @@ ghost/
 │   ├── architecture/            # Architecture contract tests
 │   ├── integration/             # Cross-module integration tests
 │   └── unit/                    # Focused unit tests
-├── TASKS.md                     # Training task queue (agent reads this)
-├── AGENT.md                     # Agent memory & state
+├── TASKS.json                   # Default object-backed training task queue
+├── TASKS.md                     # Optional legacy markdown queue notes
+├── AGENT.json                   # Object-backed agent runtime state
 ├── start.sh                     # Linux/macOS startup script
 └── start.bat                    # Windows startup script
 ```
@@ -169,6 +184,10 @@ ghost/
 |------|-------------|
 | `get_training_status` | Get current training state, epochs completed, metrics count |
 | `list_models` | List all registered models with backend info |
+| `list_training_tasks` | List queued agent tasks from the configured task queue |
+| `create_training_task` | Create a queued training task in the configured task queue |
+| `update_training_task` | Update task text or completion state in the configured task queue |
+| `delete_training_task` | Delete a queued training task from the configured task queue |
 | `get_system_health` | Report memory usage, cache sizes, and threshold status |
 | `get_model_recommendation` | Get Ollama-powered model/architecture suggestions for a task |
 | `get_training_analysis` | Ask Ollama to analyze a model's recorded training metrics and suggest next steps |
@@ -181,6 +200,7 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 - The training pipeline samples health before each epoch and reduces batch size when GPU or system memory crosses configured thresholds.
 - Health samples are cached for `HEALTH_CHECK_INTERVAL` seconds so the interval setting now controls real sampling cadence instead of acting as documentation only.
 - Cache directories are included in the health report so long-running sessions can inspect model and data footprint.
+- MCP tool responses populate `structuredContent`, so Ghost returns object payloads to compatible clients instead of stringifying dictionaries into text.
 
 ## Configuration Reference
 
@@ -195,6 +215,8 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `MODEL_CACHE_DIR` | Model checkpoint directory | `./models` |
 | `DATA_CACHE_DIR` | Dataset cache directory | `./data` |
+| `TASK_QUEUE_FILE` | Primary task queue file for the autonomous agent | `./TASKS.json` |
+| `AGENT_STATE_FILE` | Object-backed agent state file | `./AGENT.json` |
 | `DEFAULT_BATCH_SIZE` | Default training batch size | `32` |
 | `DEFAULT_LEARNING_RATE` | Default learning rate | `0.001` |
 | `DEFAULT_EPOCHS` | Default number of training epochs | `10` |
@@ -207,17 +229,20 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 
 ## Training Tasks
 
-Edit `TASKS.md` to queue training tasks for the autonomous agent:
+Use `TASKS.json` or the MCP task tools to queue training work for the autonomous agent:
 
-```markdown
-## Queue
-
-- [ ] Train ResNet50 on CIFAR-10
-- [ ] Fine-tune BERT for sentiment analysis
-- [ ] Experiment with learning rate schedules
+```json
+{
+	"version": 1,
+	"queue": [
+		{"task_id": "cifar10-baseline", "text": "Train ResNet50 on CIFAR-10", "completed": false}
+	]
+}
 ```
 
-The training agent will pick them up automatically on the next iteration.
+The training agent watches `TASKS.json` by default and the MCP server can manage the same queue with `list_training_tasks`, `create_training_task`, `update_training_task`, and `delete_training_task`.
+
+`TASKS.md` remains available only as an optional legacy input format. If you still want markdown, point the agent at a specific `.md` queue file explicitly.
 
 When Ollama is available, Ghost now turns the task text into a lightweight training plan before execution. That plan influences the selected architecture plus the initial batch size, learning rate, and epochs while still falling back safely to the repository defaults when recommendations are missing or malformed.
 

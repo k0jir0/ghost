@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 _Architecture = Literal["resnet18", "resnet50", "mlp", "custom"]
 
@@ -66,6 +66,41 @@ class ListModelsArgs(BaseModel):
 
 class GetSystemHealthArgs(BaseModel):
     pass
+
+
+class ListTrainingTasksArgs(BaseModel):
+    include_completed: bool = False
+
+
+class CreateTrainingTaskArgs(BaseModel):
+    text: str = Field(min_length=1)
+    task_id: str | None = None
+
+
+class UpdateTrainingTaskArgs(BaseModel):
+    task_id: str | None = None
+    match_text: str | None = Field(default=None, min_length=1)
+    text: str | None = Field(default=None, min_length=1)
+    completed: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> UpdateTrainingTaskArgs:
+        if self.task_id is None and self.match_text is None:
+            raise ValueError("task_id or match_text is required")
+        if self.text is None and self.completed is None:
+            raise ValueError("text or completed must be provided")
+        return self
+
+
+class DeleteTrainingTaskArgs(BaseModel):
+    task_id: str | None = None
+    match_text: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_delete(self) -> DeleteTrainingTaskArgs:
+        if self.task_id is None and self.match_text is None:
+            raise ValueError("task_id or match_text is required")
+        return self
 
 
 @dataclass(frozen=True)
@@ -177,6 +212,34 @@ class ToolCatalog:
                     input_model=ListModelsArgs,
                     handler_name="_handle_list_models",
                     tags=("models", "listing"),
+                ),
+                ToolSpec(
+                    name="list_training_tasks",
+                    description="List tasks from the autonomous training queue",
+                    input_model=ListTrainingTasksArgs,
+                    handler_name="_handle_list_training_tasks",
+                    tags=("tasks", "queue", "listing"),
+                ),
+                ToolSpec(
+                    name="create_training_task",
+                    description="Create a task in the autonomous training queue",
+                    input_model=CreateTrainingTaskArgs,
+                    handler_name="_handle_create_training_task",
+                    tags=("tasks", "queue", "create"),
+                ),
+                ToolSpec(
+                    name="update_training_task",
+                    description="Update text or completion state for a queued training task",
+                    input_model=UpdateTrainingTaskArgs,
+                    handler_name="_handle_update_training_task",
+                    tags=("tasks", "queue", "update"),
+                ),
+                ToolSpec(
+                    name="delete_training_task",
+                    description="Delete a queued training task",
+                    input_model=DeleteTrainingTaskArgs,
+                    handler_name="_handle_delete_training_task",
+                    tags=("tasks", "queue", "delete"),
                 ),
                 ToolSpec(
                     name="get_system_health",

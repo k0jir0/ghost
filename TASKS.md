@@ -1,13 +1,9 @@
-# Ghost Training Tasks
+# Legacy Ghost Training Tasks
 
-Add training tasks below. The training agent will pick them up automatically.
+This file is no longer the default runtime queue.
 
-## Queue
+Ghost now uses `TASKS.json` as the primary object-backed task queue, and the MCP server can manage that queue through the `list_training_tasks`, `create_training_task`, `update_training_task`, and `delete_training_task` tools.
 
-- [ ] Train ResNet18 on CIFAR-10 image classification
-- [ ] Experiment with learning rate schedules (cosine, step)
-- [ ] Compare PyTorch vs TensorFlow performance on MNIST
-
-## Completed
+Keep this file only if you intentionally want a legacy markdown queue and explicitly point the training agent at it.
 
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from ghost.config import get_config
 from ghost.context import BackendType, ContextManager, ModelState, TrainingMetrics
+from ghost.data_loading import DatasetBatchProvider
 from ghost.logging import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +38,10 @@ class TensorFlowOps:
         self.config = get_config()
         runtime = self.context_manager.get_runtime_bucket("tensorflow")
         self.models: dict[str, Any] = runtime.setdefault("models", {})
+        self._batch_provider = DatasetBatchProvider(
+            self.context_manager,
+            config=self.config,
+        )
         self._initialized = False
         logger.info("tensorflow_ops_init")
 
@@ -65,50 +70,20 @@ class TensorFlowOps:
         self, architecture: str, num_classes: int, input_shape: list[int]
     ) -> Any:
         """Create a model architecture using Keras."""
-        tf = _get_tf()
-
         if architecture == "mlp":
-            model = tf.keras.Sequential(
-                [
-                    tf.keras.layers.Flatten(input_shape=input_shape),
-                    tf.keras.layers.Dense(256, activation="relu"),
-                    tf.keras.layers.Dense(256, activation="relu"),
-                    tf.keras.layers.Dense(num_classes),
-                ]
-            )
-            return model
+            return self._create_mlp(num_classes, input_shape)
 
         if architecture == "resnet18":
-            # Simplified ResNet-like model
-            inputs = tf.keras.Input(shape=input_shape)
-            x = tf.keras.layers.Conv2D(64, 7, strides=2, padding="same")(inputs)
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = tf.keras.layers.ReLU()(x)
-            x = tf.keras.layers.MaxPooling2D(3, strides=2, padding="same")(x)
-
-            # Residual blocks
-            for filters in [64, 128, 256, 512]:
-                for _ in range(2):
-                    shortcut = x
-                    x = tf.keras.layers.Conv2D(filters, 3, padding="same")(x)
-                    x = tf.keras.layers.BatchNormalization()(x)
-                    x = tf.keras.layers.ReLU()(x)
-                    x = tf.keras.layers.Conv2D(filters, 3, padding="same")(x)
-                    x = tf.keras.layers.BatchNormalization()(x)
-                    x = tf.keras.layers.Add()([x, shortcut])
-                    x = tf.keras.layers.ReLU()(x)
-
-            x = tf.keras.layers.GlobalAveragePooling2D()(x)
-            outputs = tf.keras.layers.Dense(num_classes)(x)
-
-            model = tf.keras.Model(inputs, outputs)
-            return model
+            return self._create_resnet([2, 2, 2, 2], num_classes, input_shape)
 
         if architecture == "resnet50":
-            # Larger ResNet variant
-            return self._create_resnet50(num_classes, input_shape)
+            return self._create_resnet([3, 4, 6, 3], num_classes, input_shape)
+
+        if len(input_shape) != 3:
+            return self._create_mlp(num_classes, input_shape)
 
         # Default simple CNN
+        tf = _get_tf()
         model = tf.keras.Sequential(
             [
                 tf.keras.layers.Conv2D(
@@ -125,24 +100,79 @@ class TensorFlowOps:
         )
         return model
 
-    def _create_resnet50(self, num_classes: int, input_shape: list[int]) -> Any:
-        """Create ResNet50 model."""
+    def _create_mlp(self, num_classes: int, input_shape: list[int]) -> Any:
         tf = _get_tf()
-
-        base_model = tf.keras.applications.ResNet50(
-            include_top=False,
-            weights=None,
-            input_shape=input_shape,
-            classes=num_classes,
-        )
-
-        model = tf.keras.Sequential(
+        return tf.keras.Sequential(
             [
-                base_model,
-                tf.keras.layers.GlobalAveragePooling2D(),
+                tf.keras.layers.Flatten(input_shape=input_shape),
+                tf.keras.layers.Dense(256, activation="relu"),
+                tf.keras.layers.Dense(256, activation="relu"),
                 tf.keras.layers.Dense(num_classes),
             ]
         )
+
+    def _residual_block(self, x: Any, filters: int, strides: int = 1) -> Any:
+        tf = _get_tf()
+        shortcut = x
+        current_channels = x.shape[-1]
+
+        if strides != 1 or current_channels != filters:
+            shortcut = tf.keras.layers.Conv2D(
+                filters,
+                1,
+                strides=strides,
+                padding="same",
+                use_bias=False,
+            )(shortcut)
+            shortcut = tf.keras.layers.BatchNormalization()(shortcut)
+
+        x = tf.keras.layers.Conv2D(
+            filters,
+            3,
+            strides=strides,
+            padding="same",
+            use_bias=False,
+        )(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.Conv2D(
+            filters,
+            3,
+            padding="same",
+            use_bias=False,
+        )(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Add()([x, shortcut])
+        x = tf.keras.layers.ReLU()(x)
+        return x
+
+    def _create_resnet(
+        self,
+        blocks_per_stage: list[int],
+        num_classes: int,
+        input_shape: list[int],
+    ) -> Any:
+        tf = _get_tf()
+
+        inputs = tf.keras.Input(shape=input_shape)
+        x = tf.keras.layers.Conv2D(64, 7, strides=2, padding="same", use_bias=False)(
+            inputs
+        )
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.ReLU()(x)
+        x = tf.keras.layers.MaxPooling2D(3, strides=2, padding="same")(x)
+
+        for stage_index, (filters, block_count) in enumerate(
+            zip([64, 128, 256, 512], blocks_per_stage)
+        ):
+            for block_index in range(block_count):
+                stride = 2 if stage_index > 0 and block_index == 0 else 1
+                x = self._residual_block(x, filters, strides=stride)
+
+        x = tf.keras.layers.GlobalAveragePooling2D()(x)
+        outputs = tf.keras.layers.Dense(num_classes)(x)
+
+        model = tf.keras.Model(inputs, outputs)
 
         return model
 
@@ -204,25 +234,37 @@ class TensorFlowOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
 
-            self._ensure_synthetic_data_enabled("Training")
-
             ctx = self.context_manager.get_context(model_id)
+            data_mode = "synthetic"
             if ctx:
-                ctx.metadata["data_mode"] = "synthetic"
+                if isinstance(ctx.metadata.get("dataset_spec"), dict):
+                    data_mode = "real"
+                ctx.metadata["data_mode"] = data_mode
                 ctx.update_state(ModelState.TRAINING)
                 self.context_manager.update_context(ctx)
 
-            # Create dummy training data
             import numpy as np
 
-            x_train = np.random.randn(batch_size, *model.input_shape[1:]).astype(
-                np.float32
-            )
-            y_train = np.random.randint(
-                0, ctx.config.get("num_classes", 10) if ctx else 10, batch_size
-            )
+            if data_mode == "real":
+                x_train, y_train, _ = self._batch_provider.next_training_batch(
+                    model_id,
+                    batch_size,
+                )
+            else:
+                self._ensure_synthetic_data_enabled("Training")
+                x_train = np.random.randn(batch_size, *model.input_shape[1:]).astype(
+                    np.float32
+                )
+                y_train = np.random.randint(
+                    0, ctx.config.get("num_classes", 10) if ctx else 10, batch_size
+                )
 
-            # Train for one step
+            optimizer = getattr(model, "optimizer", None)
+            if optimizer is not None:
+                learning_rate_var = getattr(optimizer, "learning_rate", None)
+                if hasattr(learning_rate_var, "assign"):
+                    learning_rate_var.assign(learning_rate)
+
             history = model.train_on_batch(x_train, y_train)
 
             # Update metrics
@@ -252,7 +294,7 @@ class TensorFlowOps:
                 "accuracy": float(history[1])
                 if isinstance(history, (list, tuple)) and len(history) > 1
                 else None,
-                "data_mode": "synthetic",
+                "data_mode": data_mode,
             }
         except Exception as e:
             logger.error("train_step_failed", model_id=model_id, error=str(e))
@@ -265,23 +307,26 @@ class TensorFlowOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
 
-            self._ensure_synthetic_data_enabled("Evaluation")
-
             ctx = self.context_manager.get_context(model_id)
+            data_mode = "synthetic"
             if ctx:
-                ctx.metadata["data_mode"] = "synthetic"
+                if isinstance(ctx.metadata.get("dataset_spec"), dict):
+                    data_mode = "real"
+                ctx.metadata["data_mode"] = data_mode
                 ctx.update_state(ModelState.EVALUATING)
                 self.context_manager.update_context(ctx)
 
-            # Create dummy evaluation data
             import numpy as np
 
-            x_eval = np.random.randn(10, *model.input_shape[1:]).astype(np.float32)
-            y_eval = np.random.randint(
-                0, ctx.config.get("num_classes", 10) if ctx else 10, 10
-            )
+            if data_mode == "real":
+                x_eval, y_eval, _ = self._batch_provider.next_eval_batch(model_id, 128)
+            else:
+                self._ensure_synthetic_data_enabled("Evaluation")
+                x_eval = np.random.randn(10, *model.input_shape[1:]).astype(np.float32)
+                y_eval = np.random.randint(
+                    0, ctx.config.get("num_classes", 10) if ctx else 10, 10
+                )
 
-            # Evaluate
             results = model.evaluate(x_eval, y_eval, verbose=0)
 
             if ctx:
@@ -297,8 +342,8 @@ class TensorFlowOps:
                 "eval_accuracy": float(results[1])
                 if isinstance(results, (list, tuple)) and len(results) > 1
                 else None,
-                "num_samples": 10,
-                "data_mode": "synthetic",
+                "num_samples": len(y_eval),
+                "data_mode": data_mode,
             }
         except Exception as e:
             logger.error("evaluate_failed", model_id=model_id, error=str(e))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -92,6 +93,26 @@ class TestParseTasks:
         assert len(tasks) == 1
         assert tasks[0]["text"] == "Pending"
 
+    def test_parse_tasks_supports_json_queue(self, tmp_path: Path) -> None:
+        f = tmp_path / "TASKS.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "queue": [
+                        {"task_id": "1", "text": "Train MLP", "completed": False},
+                        {"task_id": "2", "text": "Done", "completed": True},
+                    ]
+                }
+            )
+        )
+        agent = _make_agent(f, tmp_path / "AGENT.md", tmp_path)
+
+        tasks = agent.parse_tasks()
+
+        assert len(tasks) == 1
+        assert tasks[0]["text"] == "Train MLP"
+        assert tasks[0]["task_id"] == "1"
+
 
 # ---------------------------------------------------------------------------
 # Mark task complete
@@ -124,6 +145,45 @@ class TestMarkTaskComplete:
         )
         task = {"text": "dummy", "completed": False, "raw": "- [ ] dummy"}
         agent.mark_task_complete(task)  # should not raise
+
+    def test_marks_json_task_complete(self, tmp_path: Path) -> None:
+        f = tmp_path / "TASKS.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "queue": [
+                        {"task_id": "1", "text": "Train MLP", "completed": False}
+                    ]
+                }
+            )
+        )
+        agent = _make_agent(f, tmp_path / "AGENT.md", tmp_path)
+
+        task = agent.parse_tasks()[0]
+        agent.mark_task_complete(task)
+
+        assert agent.parse_tasks() == []
+
+    def test_marks_json_task_complete_preserves_metadata(self, tmp_path: Path) -> None:
+        f = tmp_path / "TASKS.json"
+        f.write_text(
+            json.dumps(
+                {
+                    "queue": [
+                        {"task_id": "1", "text": "Train MLP", "completed": False}
+                    ],
+                    "updated_by": "user",
+                }
+            )
+        )
+        agent = _make_agent(f, tmp_path / "AGENT.md", tmp_path)
+
+        task = agent.parse_tasks()[0]
+        agent.mark_task_complete(task)
+
+        payload = json.loads(f.read_text())
+        assert payload["updated_by"] == "user"
+        assert payload["queue"][0]["completed"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +311,20 @@ class TestExecuteTask:
         assert first_text not in remaining
 
     @pytest.mark.asyncio
+    async def test_stop_writes_agent_state_json(self, tmp_path: Path) -> None:
+        tasks_file = tmp_path / "TASKS.md"
+        tasks_file.write_text("## Queue\n\n- [ ] Train image classifier\n")
+        agent = _make_agent(tasks_file, tmp_path / "AGENT.md", tmp_path)
+
+        agent.stop()
+
+        state_file = tmp_path / "AGENT.json"
+        assert state_file.exists()
+        payload = json.loads(state_file.read_text())
+        assert payload["iterations"] == 0
+        assert payload["running"] is False
+
+    @pytest.mark.asyncio
     async def test_recommendations_drive_training_plan(self, tmp_path: Path) -> None:
         tasks_file = tmp_path / "TASKS.md"
         tasks_file.write_text("## Queue\n\n- [ ] Train ResNet50 on CIFAR-10 image classification\n")
@@ -281,6 +355,7 @@ class TestExecuteTask:
         create_call = agent.pytorch_ops.create_model.await_args
         assert create_call.kwargs["architecture"] == "resnet50"
         assert create_call.kwargs["num_classes"] == 10
+        assert create_call.kwargs["input_shape"] == [3, 32, 32]
 
         training_config = agent.training_pipeline.train.await_args.args[0]
         assert training_config.batch_size == 64

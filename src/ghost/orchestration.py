@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from ghost.config import GhostConfig, get_config
 from ghost.context import BackendType, ContextManager
-from ghost.datasets import DatasetResolver, DatasetSpec
+from ghost.datasets import DatasetResolver, DatasetSpec, dataset_input_shape
 from ghost.logging import get_logger
 from ghost.ollama_client import OllamaClient
 from ghost.planning import PlanningRequest, TrainingPlan, TrainingPlanner
@@ -236,11 +236,12 @@ class TrainingOrchestrator:
         request: TrainingRunRequest,
         record: TrainingRunRecord,
     ) -> DatasetSpec | None:
-        if not request.dataset_ref:
+        dataset_reference = request.dataset_ref or request.dataset
+        if not dataset_reference:
             return None
 
         dataset_spec = self.dataset_resolver.resolve(
-            request.dataset_ref,
+            dataset_reference,
             allow_synthetic=request.allow_synthetic,
         )
         record.dataset = dataset_spec
@@ -280,6 +281,9 @@ class TrainingOrchestrator:
                 else record.model_id,
                 architecture=plan.architecture,
                 num_classes=plan.num_classes,
+                input_shape=list(dataset_input_shape(record.dataset, plan.backend))
+                if record.dataset is not None
+                else None,
             )
             if create_result.get("status") != "success":
                 raise RuntimeError(

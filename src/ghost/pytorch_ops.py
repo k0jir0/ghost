@@ -14,6 +14,7 @@ import torch.optim as optim
 
 from ghost.config import get_config
 from ghost.context import BackendType, ContextManager, ModelState, TrainingMetrics
+from ghost.data_loading import DatasetBatchProvider
 from ghost.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,9 +40,9 @@ class SimpleMLP(nn.Module):
 class ResNetSimple(nn.Module):
     """Simplified ResNet-like architecture."""
 
-    def __init__(self, num_classes: int = 10):
+    def __init__(self, num_classes: int = 10, input_channels: int = 3):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -100,6 +101,10 @@ class PyTorchOps:
         self.optimizers: dict[str, optim.Optimizer] = runtime.setdefault(
             "optimizers", {}
         )
+        self._batch_provider = DatasetBatchProvider(
+            self.context_manager,
+            config=self.config,
+        )
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("pytorch_init", device=str(self._device))
 
@@ -128,7 +133,11 @@ class PyTorchOps:
             return SimpleMLP(input_size, 256, num_classes)
 
         if architecture in ("resnet18", "resnet50"):
-            return ResNetSimple(num_classes=num_classes)
+            input_channels = input_shape[0] if len(input_shape) == 3 else 1
+            return ResNetSimple(
+                num_classes=num_classes,
+                input_channels=input_channels,
+            )
 
         # Default MLP
         input_size = 1
@@ -189,46 +198,50 @@ class PyTorchOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
 
-            self._ensure_synthetic_data_enabled("Training")
-
             ctx = self.context_manager.get_context(model_id)
+            data_mode = "synthetic"
             if ctx:
-                ctx.metadata["data_mode"] = "synthetic"
+                if isinstance(ctx.metadata.get("dataset_spec"), dict):
+                    data_mode = "real"
+                ctx.metadata["data_mode"] = data_mode
                 ctx.update_state(ModelState.TRAINING)
                 self.context_manager.update_context(ctx)
 
-            # Simulate training step with dummy data
             model.train()
 
-            # Create dummy batch
-            if isinstance(model, ResNetSimple):
-                dummy_input = torch.randn(batch_size, 3, 224, 224).to(self._device)
+            if data_mode == "real":
+                batch_input, batch_target, _ = self._next_real_training_batch(
+                    model_id,
+                    batch_size,
+                )
             else:
-                dummy_input = torch.randn(batch_size, 3, 224, 224).to(self._device)
+                self._ensure_synthetic_data_enabled("Training")
+                batch_input, batch_target = self._next_synthetic_batch(
+                    ctx,
+                    batch_size,
+                )
 
-            dummy_target = torch.randint(
-                0, ctx.config.get("num_classes", 10) if ctx else 10, (batch_size,)
-            ).to(self._device)
+            output = model(batch_input)
+            loss = nn.CrossEntropyLoss()(output, batch_target)
+            predictions = output.argmax(dim=1)
+            accuracy = (predictions == batch_target).float().mean().item()
 
-            # Forward pass
-            output = model(dummy_input)
-            loss = nn.CrossEntropyLoss()(output, dummy_target)
-
-            # Backward pass
             optimizer = self.optimizers.get(model_id) or optim.Adam(
                 model.parameters(), lr=learning_rate
             )
+            self.optimizers[model_id] = optimizer
+            for group in optimizer.param_groups:
+                group["lr"] = learning_rate
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # Update metrics
             if ctx:
                 metric = TrainingMetrics(
                     epoch=ctx.epochs_completed,
                     step=ctx.current_step + 1,
                     loss=loss.item(),
-                    accuracy=None,
+                    accuracy=accuracy,
                     learning_rate=learning_rate,
                 )
                 ctx.add_metric(metric)
@@ -240,7 +253,8 @@ class PyTorchOps:
                 "model_id": model_id,
                 "step": ctx.current_step if ctx else 1,
                 "loss": loss.item(),
-                "data_mode": "synthetic",
+                "accuracy": accuracy,
+                "data_mode": data_mode,
             }
         except Exception as e:
             logger.error("train_step_failed", model_id=model_id, error=str(e))
@@ -253,23 +267,28 @@ class PyTorchOps:
             if model is None:
                 return {"status": "error", "message": "Model not found"}
 
-            self._ensure_synthetic_data_enabled("Evaluation")
-
             ctx = self.context_manager.get_context(model_id)
+            data_mode = "synthetic"
             if ctx:
-                ctx.metadata["data_mode"] = "synthetic"
+                if isinstance(ctx.metadata.get("dataset_spec"), dict):
+                    data_mode = "real"
+                ctx.metadata["data_mode"] = data_mode
                 ctx.update_state(ModelState.EVALUATING)
                 self.context_manager.update_context(ctx)
 
             model.eval()
 
-            # Simulate evaluation
             with torch.no_grad():
-                dummy_input = torch.randn(10, 3, 224, 224).to(self._device)
-                output = model(dummy_input)
-                loss = nn.CrossEntropyLoss()(
-                    output, torch.randint(0, 10, (10,)).to(self._device)
-                )
+                if data_mode == "real":
+                    eval_input, eval_target, _ = self._next_real_eval_batch(model_id)
+                else:
+                    self._ensure_synthetic_data_enabled("Evaluation")
+                    eval_input, eval_target = self._next_synthetic_batch(ctx, 10)
+
+                output = model(eval_input)
+                loss = nn.CrossEntropyLoss()(output, eval_target)
+                predictions = output.argmax(dim=1)
+                accuracy = (predictions == eval_target).float().mean().item()
 
             if ctx:
                 ctx.update_state(ModelState.READY)
@@ -279,12 +298,64 @@ class PyTorchOps:
                 "status": "success",
                 "model_id": model_id,
                 "eval_loss": loss.item(),
-                "num_samples": 10,
-                "data_mode": "synthetic",
+                "eval_accuracy": accuracy,
+                "num_samples": len(eval_target),
+                "data_mode": data_mode,
             }
         except Exception as e:
             logger.error("evaluate_failed", model_id=model_id, error=str(e))
             return {"status": "error", "message": str(e)}
+
+    def _next_real_training_batch(
+        self,
+        model_id: str,
+        batch_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, Any]:
+        features, labels, spec = self._batch_provider.next_training_batch(
+            model_id,
+            batch_size,
+        )
+        batch_input, batch_target = self._torch_batch(features, labels)
+        return batch_input, batch_target, spec
+
+    def _next_real_eval_batch(
+        self,
+        model_id: str,
+        batch_size: int = 128,
+    ) -> tuple[torch.Tensor, torch.Tensor, Any]:
+        features, labels, spec = self._batch_provider.next_eval_batch(
+            model_id,
+            batch_size,
+        )
+        batch_input, batch_target = self._torch_batch(features, labels)
+        return batch_input, batch_target, spec
+
+    def _torch_batch(
+        self,
+        features: Any,
+        labels: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if getattr(features, "ndim", 0) == 4:
+            features = features.transpose(0, 3, 1, 2)
+
+        batch_input = torch.from_numpy(features).float().to(self._device)
+        batch_target = torch.from_numpy(labels).long().to(self._device)
+        return batch_input, batch_target
+
+    def _next_synthetic_batch(
+        self,
+        ctx: Any,
+        batch_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        input_shape = list(ctx.config.get("input_shape", [3, 224, 224])) if ctx else [3, 224, 224]
+        if len(input_shape) == 1:
+            dummy_input = torch.randn(batch_size, input_shape[0]).to(self._device)
+        else:
+            dummy_input = torch.randn(batch_size, *input_shape).to(self._device)
+
+        num_classes = ctx.config.get("num_classes", 10) if ctx else 10
+        dummy_target = torch.randint(0, num_classes, (batch_size,)).to(self._device)
+        return dummy_input, dummy_target
 
     async def save_checkpoint(
         self,
