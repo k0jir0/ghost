@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import json
 from pathlib import Path
-import re
-from typing import Any, Mapping
+from typing import Any, cast
 
 
 def _utc_now_iso() -> str:
@@ -82,7 +83,9 @@ class TaskQueueStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._legacy_markdown_path = (
-            self.path.with_suffix(".md") if self.path.suffix.lower() == ".json" else None
+            self.path.with_suffix(".md")
+            if self.path.suffix.lower() == ".json"
+            else None
         )
 
     def exists(self) -> bool:
@@ -91,7 +94,10 @@ class TaskQueueStore:
     def active_path(self) -> Path:
         if self.path.exists():
             return self.path
-        if self._legacy_markdown_path is not None and self._legacy_markdown_path.exists():
+        if (
+            self._legacy_markdown_path is not None
+            and self._legacy_markdown_path.exists()
+        ):
             return self._legacy_markdown_path
         return self.path
 
@@ -103,7 +109,9 @@ class TaskQueueStore:
         if not source.exists():
             return []
         if source.suffix.lower() == ".md":
-            return self._load_markdown_tasks(source, include_completed=include_completed)
+            return self._load_markdown_tasks(
+                source, include_completed=include_completed
+            )
         return self._load_json_tasks(source, include_completed=include_completed)
 
     def pending_tasks(self) -> list[QueueTask]:
@@ -185,7 +193,9 @@ class TaskQueueStore:
                 ):
                     updated = QueueTask(
                         text=clean_text or existing.text,
-                        completed=(existing.completed if completed is None else completed),
+                        completed=(
+                            existing.completed if completed is None else completed
+                        ),
                         task_id=existing.task_id,
                         updated_at=_utc_now_iso(),
                         metadata=existing.metadata,
@@ -371,12 +381,22 @@ class TaskQueueStore:
         return tasks
 
     def _load_json_payload_for_write(self) -> dict[str, Any]:
+        payload: dict[str, Any]
         if self.path.exists():
             try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = cast(dict[str, Any], loaded)
+                else:
+                    payload = self._default_payload()
+                    if isinstance(loaded, list):
+                        payload["queue"] = loaded
             except Exception:
                 payload = self._default_payload()
-        elif self._legacy_markdown_path is not None and self._legacy_markdown_path.exists():
+        elif (
+            self._legacy_markdown_path is not None
+            and self._legacy_markdown_path.exists()
+        ):
             payload = self._default_payload()
             payload["queue"] = [
                 task.to_dict()

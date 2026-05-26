@@ -1,6 +1,6 @@
 # Ghost — AI Model Context & Training Platform
 
-Ghost is an intelligent ML training and inference platform that combines **PyTorch** and **TensorFlow** backends with the **Model Context Protocol (MCP)** for context-aware AI interactions and **Ollama** for local LLM-powered assistance. The current codebase is organized around explicit planning, dataset resolution, orchestration, and tool-catalog layers so the autonomous agent and MCP server share the same training primitives.
+Ghost is a local-first ML training, evaluation, registry, and inference platform that combines **PyTorch** and **TensorFlow** backends with the **Model Context Protocol (MCP)** for context-aware AI interactions and **Ollama** for local LLM-powered assistance. The current codebase is organized around explicit planning, dataset resolution, orchestration, and tool-catalog layers so the autonomous agent and MCP server share the same training primitives.
 
 ## Architecture
 
@@ -55,6 +55,25 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **Health Monitoring** — GPU, memory, and cache monitoring with configurable thresholds
 - **Graceful Degradation** — Memory pressure automatically reduces training batch size before the run escalates
 - **Type-Safe Config** — Pydantic-based `GhostConfig` with `.env` file support
+
+## What Ghost Can Do Today
+
+- **Plan and run training work** across PyTorch and TensorFlow through a shared orchestration flow with checkpoints, resume support, and health-aware batch-size reduction.
+- **Operate as an autonomous training agent** using `TASKS.json`, `AGENT.json`, and Ollama-backed plan recommendations for architecture and hyperparameters.
+- **Load governed datasets** from built-in sources plus external versioned `.npz` bundles staged from filesystem or object-store-style URIs.
+- **Persist the ML control plane** including dataset manifests, validation reports, experiment runs, artifact lineage, registry records, evaluations, audits, and workflow metadata.
+- **Evaluate and govern models** with threshold gates, registry stages, approval metadata, promotion and rejection flows, and audit trails.
+- **Serve predictions** through registry-backed online and batch inference, with an optional FastAPI app factory for local HTTP exposure.
+- **Observe production behavior** by recording prediction events, generating drift reports, deriving alerts, and creating drift-triggered retraining workflows.
+- **Expose the platform through MCP** so dataset, run, registry, inference, observability, health, and task operations are callable as structured tools.
+
+## Current Boundaries
+
+- Ghost is **local-first and Ghost-native** today. The main loop is implemented inside the repository rather than backed by external managed infrastructure.
+- The auth and environment layers are **lightweight primitives**, not a full enterprise identity or secrets-management stack.
+- The serving layer is an **optional FastAPI surface**, not a full production deployment system with autoscaling, ingress, and hardened operations built in.
+- The object-store ingestion path is **pluggable**, but it still expects a real fetch adapter and external storage platform to become a complete production connector.
+- Ghost does **not** yet include a true feature store, distributed orchestration stack, or external durable metadata backend such as Postgres as part of the default implementation.
 
 ## Recent Progress
 
@@ -250,13 +269,15 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 
 Ghost now covers the full local production-ML-stack loop inside the repository:
 
-- versioned dataset manifests and validation reports
+- governed dataset ingestion plus versioned manifests and validation reports
 - searchable experiment records and artifact lineage
 - evaluation-gated model registration and promotion
 - registry-backed online and batch inference
 - prediction observability, drift reporting, and alert derivation
 - drift-triggered retraining workflow creation
 - lightweight auth and environment separation primitives
+
+This means Ghost is functionally end-to-end for a local ML platform: it can go from dataset intake to training, evaluation, registration, serving, and operational feedback inside one codebase.
 
 The current implementation is Ghost-native and local-first. For team or internet-facing deployment, pair these abstractions with external infrastructure such as Postgres, S3/MinIO, a production scheduler, and a real HTTP serving deployment.
 

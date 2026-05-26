@@ -18,18 +18,18 @@ from mcp.types import (
 )
 from pydantic import ValidationError
 
+from ghost.alerts import AlertManager
 from ghost.config import get_config
 from ghost.context import BackendType, ContextManager
 from ghost.data_validation import DatasetValidator
 from ghost.dataset_registry import DatasetRegistry
+from ghost.drift import DriftDetector
 from ghost.evaluation import EvaluationPolicy
 from ghost.health_monitor import HealthMonitor
 from ghost.inference import InferenceService
 from ghost.logging import get_logger
 from ghost.metadata_store import MetadataStore
 from ghost.model_registry import ModelRegistry
-from ghost.alerts import AlertManager
-from ghost.drift import DriftDetector
 from ghost.observability import ModelObservability
 from ghost.ollama_client import OllamaClient
 from ghost.orchestration import TrainingRunRecord
@@ -356,7 +356,9 @@ class GhostMCPServer:
         comparison = self.run_store.compare_runs(arguments["run_ids"])
         if comparison["count"] != len(arguments["run_ids"]):
             found_ids = {run["run_id"] for run in comparison["runs"]}
-            missing = [run_id for run_id in arguments["run_ids"] if run_id not in found_ids]
+            missing = [
+                run_id for run_id in arguments["run_ids"] if run_id not in found_ids
+            ]
             return {
                 "error": "One or more runs were not found",
                 "missing_run_ids": missing,
@@ -434,14 +436,18 @@ class GhostMCPServer:
             "alerts": alerts,
         }
 
-    async def _handle_get_drift_report(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_get_drift_report(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         report = self.drift_detector.get_report(arguments["registry_id"])
         return {"report": report.to_dict()}
 
     async def _handle_list_dataset_manifests(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        manifests = [manifest.to_dict() for manifest in self.dataset_registry.list_manifests()]
+        manifests = [
+            manifest.to_dict() for manifest in self.dataset_registry.list_manifests()
+        ]
         return {
             "manifests": manifests,
             "count": len(manifests),

@@ -6,12 +6,13 @@ Similar to Hephaestus agent pattern.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import asyncio
-from datetime import datetime, timezone
 import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from ghost.config import get_config
 from ghost.context import BackendType, ContextManager
@@ -62,8 +63,14 @@ class TrainingAgent:
     ):
         """Initialize training agent."""
         self.config = get_config()
-        self.tasks_file = Path(tasks_file) if tasks_file is not None else self.config.task_queue_file
-        self.agent_memory = Path(agent_memory) if agent_memory is not None else self.config.agent_state_file
+        self.tasks_file = (
+            Path(tasks_file) if tasks_file is not None else self.config.task_queue_file
+        )
+        self.agent_memory = (
+            Path(agent_memory)
+            if agent_memory is not None
+            else self.config.agent_state_file
+        )
         self.agent_state_file = self._resolve_agent_state_file(self.agent_memory)
         self.task_queue = TaskQueueStore(self.tasks_file)
 
@@ -297,7 +304,9 @@ class TrainingAgent:
             ctx = self.context_manager.get_context(model_id)
             if ctx is not None:
                 ctx.metadata["task_text"] = task_text
-                ctx.metadata["dataset"] = dataset_spec.dataset_id if dataset_spec else plan.dataset
+                ctx.metadata["dataset"] = (
+                    dataset_spec.dataset_id if dataset_spec else plan.dataset
+                )
                 if dataset_spec is not None:
                     ctx.metadata["dataset_spec"] = asdict(dataset_spec)
                 ctx.metadata["training_plan"] = plan.to_dict()

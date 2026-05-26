@@ -94,7 +94,9 @@ class TrainingRunRecord:
             status=str(payload["status"]),
             plan=_training_plan_from_dict(payload.get("plan")),
             analysis=(
-                payload["analysis"] if isinstance(payload.get("analysis"), dict) else None
+                payload["analysis"]
+                if isinstance(payload.get("analysis"), dict)
+                else None
             ),
             events=(
                 payload["events"] if isinstance(payload.get("events"), list) else []

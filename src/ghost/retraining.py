@@ -55,12 +55,13 @@ class RetrainingManager:
             f"Retrain {record.model_id} on {record.dataset_id or 'its dataset'}",
             task_id=f"retrain-{registry_id}",
         )
+        task_id = task.task_id or f"retrain-{registry_id}"
         request = RetrainingRequest(
             request_id=f"{registry_id}__retrain",
             registry_id=registry_id,
             model_id=record.model_id,
             reason=reason,
-            task_id=task.task_id,
+            task_id=task_id,
         )
         self.metadata_store.save_record(
             "retraining-requests",

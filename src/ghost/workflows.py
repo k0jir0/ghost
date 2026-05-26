@@ -43,7 +43,9 @@ class WorkflowEngine:
             self.config.data_cache_dir / "metadata"
         )
 
-    def trigger_drift_retraining(self, registry_id: str, *, reason: str) -> WorkflowRecord:
+    def trigger_drift_retraining(
+        self, registry_id: str, *, reason: str
+    ) -> WorkflowRecord:
         request = self.retraining_manager.queue_retraining(registry_id, reason=reason)
         workflow = WorkflowRecord(
             workflow_id=f"workflow__{registry_id}__drift-retraining",
@@ -52,5 +54,7 @@ class WorkflowEngine:
             status="queued",
             metadata={"retraining_request_id": request.request_id, "reason": reason},
         )
-        self.metadata_store.save_record("workflows", workflow.workflow_id, workflow.to_dict())
+        self.metadata_store.save_record(
+            "workflows", workflow.workflow_id, workflow.to_dict()
+        )
         return workflow

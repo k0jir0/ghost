@@ -99,7 +99,11 @@ class ObjectStoreDatasetIngestor:
 
             fetched = self.object_fetcher(source_uri, destination)
             fetched_path = Path(fetched) if fetched is not None else destination
-            if fetched_path != destination and fetched_path.exists() and not destination.exists():
+            if (
+                fetched_path != destination
+                and fetched_path.exists()
+                and not destination.exists()
+            ):
                 shutil.copyfile(fetched_path, destination)
 
         if not destination.exists():
@@ -114,7 +118,11 @@ class ObjectStoreDatasetIngestor:
         source_name = Path(parsed.path).name or f"{spec.dataset_id}.npz"
         version = self._version_for_spec(spec, source_uri)
         safe_dataset = spec.dataset_id.replace("/", "-")
-        return self.config.data_cache_dir / "ingested" / f"{safe_dataset}-{version}-{source_name}"
+        return (
+            self.config.data_cache_dir
+            / "ingested"
+            / f"{safe_dataset}-{version}-{source_name}"
+        )
 
     def _version_for_spec(self, spec: DatasetSpec, source_uri: str) -> str:
         metadata = spec.metadata if isinstance(spec.metadata, dict) else {}

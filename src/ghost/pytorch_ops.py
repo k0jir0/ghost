@@ -347,7 +347,9 @@ class PyTorchOps:
         ctx: Any,
         batch_size: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        input_shape = list(ctx.config.get("input_shape", [3, 224, 224])) if ctx else [3, 224, 224]
+        input_shape = (
+            list(ctx.config.get("input_shape", [3, 224, 224])) if ctx else [3, 224, 224]
+        )
         if len(input_shape) == 1:
             dummy_input = torch.randn(batch_size, input_shape[0]).to(self._device)
         else:

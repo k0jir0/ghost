@@ -40,7 +40,9 @@ class WorkflowScheduler:
         )
 
     def upsert_policy(self, policy: RetrainingPolicy) -> None:
-        self.metadata_store.save_record("retraining-policies", policy.policy_id, policy.to_dict())
+        self.metadata_store.save_record(
+            "retraining-policies", policy.policy_id, policy.to_dict()
+        )
 
     def evaluate_policies(self) -> list[WorkflowRecord]:
         created: list[WorkflowRecord] = []

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 
 from ghost.config import GhostConfig, get_config
 from ghost.context import BackendType, ContextManager
@@ -117,7 +117,9 @@ class InferenceService:
             model_name=record.model_id,
             architecture=record.architecture,
             num_classes=int(record.metadata.get("num_classes", 1) or 1),
-            input_shape=[int(value) for value in record.metadata.get("input_shape", [])],
+            input_shape=[
+                int(value) for value in record.metadata.get("input_shape", [])
+            ],
         )
         if create_result.get("status") != "success":
             raise RuntimeError(create_result.get("message", "Model creation failed"))
@@ -138,7 +140,9 @@ class InferenceService:
         input_shape: list[int],
         backend: str,
     ) -> np.ndarray:
-        samples = [self._prepare_sample(sample, input_shape, backend) for sample in inputs]
+        samples = [
+            self._prepare_sample(sample, input_shape, backend) for sample in inputs
+        ]
         return np.stack(samples).astype(np.float32)
 
     def _prepare_sample(
@@ -160,7 +164,10 @@ class InferenceService:
             channels_last = (input_shape[1], input_shape[2], input_shape[0])
             if backend == BackendType.PYTORCH.value and array.shape == channels_last:
                 return np.transpose(array, (2, 0, 1))
-            if backend == BackendType.TENSORFLOW.value and array.shape == channels_first:
+            if (
+                backend == BackendType.TENSORFLOW.value
+                and array.shape == channels_first
+            ):
                 return np.transpose(array, (1, 2, 0))
 
         if array.size == int(np.prod(expected_shape)):
@@ -190,7 +197,9 @@ class InferenceService:
             scores = torch.softmax(logits, dim=1).cpu().numpy()
         return self._prediction_payloads(scores)
 
-    def _predict_tensorflow(self, model: Any, batch: np.ndarray) -> list[dict[str, Any]]:
+    def _predict_tensorflow(
+        self, model: Any, batch: np.ndarray
+    ) -> list[dict[str, Any]]:
         predictions = model.predict(batch, verbose=0)
         scores = self._softmax(np.asarray(predictions, dtype=np.float32))
         return self._prediction_payloads(scores)
@@ -206,12 +215,13 @@ class InferenceService:
             )
         return payloads
 
-    def _softmax(self, logits: np.ndarray) -> np.ndarray:
+    def _softmax(self, logits: np.ndarray) -> NDArray[np.float32]:
         if logits.ndim == 1:
             logits = logits.reshape(1, -1)
         shifted = logits - np.max(logits, axis=1, keepdims=True)
         exp = np.exp(shifted)
-        return exp / np.sum(exp, axis=1, keepdims=True)
+        normalized = exp / np.sum(exp, axis=1, keepdims=True)
+        return np.asarray(normalized, dtype=np.float32)
 
     def _serving_model_id(self, registry_id: str) -> str:
         safe_registry_id = registry_id.replace("/", "-")

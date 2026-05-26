@@ -163,7 +163,7 @@ class TensorFlowOps:
         x = tf.keras.layers.MaxPooling2D(3, strides=2, padding="same")(x)
 
         for stage_index, (filters, block_count) in enumerate(
-            zip([64, 128, 256, 512], blocks_per_stage)
+            zip([64, 128, 256, 512], blocks_per_stage, strict=True)
         ):
             for block_index in range(block_count):
                 stride = 2 if stage_index > 0 and block_index == 0 else 1

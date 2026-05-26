@@ -148,11 +148,15 @@ class ModelRegistry:
             raise ValueError("Model has not passed evaluation gates")
 
         if stage == "production":
-            for current in self.list_models(stage="production", model_id=record.model_id):
+            for current in self.list_models(
+                stage="production", model_id=record.model_id
+            ):
                 if current.registry_id == record.registry_id:
                     continue
                 current.stage = "archived"
-                current.aliases = [item for item in current.aliases if item != "current-production"]
+                current.aliases = [
+                    item for item in current.aliases if item != "current-production"
+                ]
                 self._save_record(current)
 
         record.stage = stage

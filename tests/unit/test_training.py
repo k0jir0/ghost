@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -141,12 +142,8 @@ class TestTrainingPipelineContextMissing:
         cm = ContextManager(storage_path=tmp_data_dir)
         pipeline = TrainingPipeline(context_manager=cm)
 
-        import asyncio
-
         cfg = TrainingConfig(model_id="no_such_model", backend=BackendType.PYTORCH)
-        result: TrainingResult = asyncio.get_event_loop().run_until_complete(
-            pipeline.train(cfg)
-        )
+        result: TrainingResult = asyncio.run(pipeline.train(cfg))
         assert result.success is False
         assert "not found" in (result.error or "").lower()
 
@@ -155,9 +152,7 @@ class TestTrainingPipelineLoop:
     """_run_training_loop behaves correctly with a mocked backend."""
 
     def _run(self, pipeline: TrainingPipeline, cfg: TrainingConfig) -> TrainingResult:
-        import asyncio
-
-        return asyncio.get_event_loop().run_until_complete(pipeline.train(cfg))
+        return asyncio.run(pipeline.train(cfg))
 
     def test_successful_run_returns_success(self, tmp_data_dir: Path) -> None:
         cm = ContextManager(storage_path=tmp_data_dir)
@@ -355,11 +350,7 @@ class TestTrainingPipelineLoop:
         pipeline = TrainingPipeline(context_manager=cm)
         creator = SharedRuntimeFakePyTorchOps(cm)
 
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(
-            creator.create_model("shared", "Shared", architecture="mlp")
-        )
+        asyncio.run(creator.create_model("shared", "Shared", architecture="mlp"))
 
         cfg = TrainingConfig(
             model_id="shared",

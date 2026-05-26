@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, TypedDict, cast
 
 import numpy as np
+from numpy.typing import NDArray
 
 from ghost.config import GhostConfig, get_config
 from ghost.context import ContextManager
@@ -19,7 +21,15 @@ from ghost.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _get_tensorflow():
+IntArray = NDArray[np.int64]
+
+
+class CursorState(TypedDict):
+    offset: int
+    order: IntArray
+
+
+def _get_tensorflow() -> Any:
     import tensorflow as tf
 
     return tf
@@ -47,7 +57,9 @@ class RealDatasetLoader:
     ):
         self.config = config or get_config()
         self.dataset_registry = dataset_registry or DatasetRegistry(config=self.config)
-        self.dataset_validator = dataset_validator or DatasetValidator(config=self.config)
+        self.dataset_validator = dataset_validator or DatasetValidator(
+            config=self.config
+        )
         self.ingestion_service = ingestion_service or DatasetIngestionService(
             config=self.config
         )
@@ -198,9 +210,11 @@ class DatasetBatchProvider:
         self.config = config or get_config()
         self.loader = loader or RealDatasetLoader(config=self.config)
         runtime = self.context_manager.get_runtime_bucket("datasets")
-        self._cursors: dict[str, dict[str, np.ndarray | int]] = runtime.setdefault(
-            "cursors", {}
-        )
+        cursor_bucket = runtime.setdefault("cursors", {})
+        if not isinstance(cursor_bucket, dict):
+            cursor_bucket = {}
+            runtime["cursors"] = cursor_bucket
+        self._cursors = cast(dict[str, CursorState], cursor_bucket)
 
     def next_training_batch(
         self,
@@ -226,9 +240,7 @@ class DatasetBatchProvider:
     ) -> tuple[np.ndarray, np.ndarray, DatasetSpec]:
         spec = self._resolve_dataset_spec(model_id)
         dataset = self.loader.load(spec)
-        features = (
-            dataset.train_features if split == "train" else dataset.eval_features
-        )
+        features = dataset.train_features if split == "train" else dataset.eval_features
         labels = dataset.train_labels if split == "train" else dataset.eval_labels
 
         sample_count = min(batch_size, len(labels))
@@ -261,22 +273,26 @@ class DatasetBatchProvider:
         state["offset"] = next_offset
         return features[indices], labels[indices], spec
 
+    def _initial_order(self, dataset_size: int, shuffle: bool) -> IntArray:
+        if shuffle:
+            return np.random.permutation(dataset_size).astype(np.int64)
+        return np.arange(dataset_size, dtype=np.int64)
+
     def _get_cursor_state(
         self,
         model_id: str,
         split: str,
         dataset_size: int,
         shuffle: bool,
-    ) -> dict[str, np.ndarray | int]:
+    ) -> CursorState:
         key = f"{model_id}:{split}"
-        order = (
-            np.random.permutation(dataset_size)
-            if shuffle
-            else np.arange(dataset_size, dtype=np.int64)
-        )
-        state = self._cursors.setdefault(key, {"offset": 0, "order": order})
+        order = self._initial_order(dataset_size, shuffle)
+        state = self._cursors.setdefault(key, CursorState(offset=0, order=order))
         current_order = state.get("order")
-        if not isinstance(current_order, np.ndarray) or len(current_order) != dataset_size:
+        if (
+            not isinstance(current_order, np.ndarray)
+            or len(current_order) != dataset_size
+        ):
             state["order"] = order
             state["offset"] = 0
         return state
@@ -284,7 +300,9 @@ class DatasetBatchProvider:
     def _resolve_dataset_spec(self, model_id: str) -> DatasetSpec:
         ctx = self.context_manager.get_context(model_id)
         if ctx is None:
-            raise RuntimeError(f"Model context not found for dataset-backed model: {model_id}")
+            raise RuntimeError(
+                f"Model context not found for dataset-backed model: {model_id}"
+            )
 
         dataset_payload = ctx.metadata.get("dataset_spec")
         if not isinstance(dataset_payload, dict):

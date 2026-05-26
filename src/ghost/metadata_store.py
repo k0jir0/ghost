@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 
@@ -15,7 +15,9 @@ class MetadataStore:
         self.root_path = Path(root_path or "./data/metadata")
         self.root_path.mkdir(parents=True, exist_ok=True)
 
-    def save_record(self, category: str, record_id: str, payload: dict[str, Any]) -> None:
+    def save_record(
+        self, category: str, record_id: str, payload: dict[str, Any]
+    ) -> None:
         category_dir = self._category_dir(category)
         record_path = category_dir / f"{record_id}.json"
         temp_path = record_path.with_name(f".{record_path.name}.{uuid4().hex}.tmp")
@@ -31,14 +33,19 @@ class MetadataStore:
         record_path = self._category_dir(category) / f"{record_id}.json"
         if not record_path.exists():
             return None
-        return json.loads(record_path.read_text(encoding="utf-8"))
+        loaded = json.loads(record_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            return None
+        return cast(dict[str, Any], loaded)
 
     def list_records(self, category: str) -> list[dict[str, Any]]:
         category_dir = self._category_dir(category)
         records: list[dict[str, Any]] = []
         for record_path in sorted(category_dir.glob("*.json")):
             try:
-                records.append(json.loads(record_path.read_text(encoding="utf-8")))
+                loaded = json.loads(record_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    records.append(cast(dict[str, Any], loaded))
             except Exception:
                 continue
         return records

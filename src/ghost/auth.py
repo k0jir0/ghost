@@ -42,7 +42,9 @@ class AuthService:
             self.config.data_cache_dir / "metadata"
         )
 
-    def issue_token(self, subject: str, scopes: list[str]) -> tuple[str, AccessTokenRecord]:
+    def issue_token(
+        self, subject: str, scopes: list[str]
+    ) -> tuple[str, AccessTokenRecord]:
         raw_token = secrets.token_hex(16)
         token_id = secrets.token_hex(8)
         record = AccessTokenRecord(

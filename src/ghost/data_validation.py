@@ -73,7 +73,9 @@ class DatasetValidator:
         if len(dataset.eval_features) != eval_count:
             issues.append("Evaluation features and labels are misaligned")
 
-        observed_num_classes = int(len(np.unique(dataset.train_labels))) if train_count else 0
+        observed_num_classes = (
+            int(len(np.unique(dataset.train_labels))) if train_count else 0
+        )
         if observed_num_classes > spec.num_classes:
             issues.append("Observed class count exceeds dataset specification")
 

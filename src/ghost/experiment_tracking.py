@@ -34,7 +34,9 @@ class ExperimentTracker:
             experiment_record=experiment_record,
             context=context,
         )
-        experiment_record.artifact_ids = [artifact.artifact_id for artifact in artifacts]
+        experiment_record.artifact_ids = [
+            artifact.artifact_id for artifact in artifacts
+        ]
         self.run_store.upsert_run(experiment_record)
         for artifact in artifacts:
             self.run_store.upsert_artifact(artifact)
@@ -78,7 +80,9 @@ class ExperimentTracker:
                 "error": record.error,
                 "event_count": len(record.events),
                 "health_status": (
-                    record.result.health_status if record.result is not None else "unknown"
+                    record.result.health_status
+                    if record.result is not None
+                    else "unknown"
                 ),
                 "used_synthetic_data": (
                     record.result.used_synthetic_data
@@ -133,9 +137,13 @@ class ExperimentTracker:
         record: TrainingRunRecord,
     ) -> str:
         task = record.request.task if record.request is not None else record.model_id
-        dataset = record.dataset.dataset_id if record.dataset is not None else "no-dataset"
+        dataset = (
+            record.dataset.dataset_id if record.dataset is not None else "no-dataset"
+        )
         backend = record.plan.backend.value if record.plan is not None else "unknown"
-        architecture = record.plan.architecture if record.plan is not None else "unknown"
+        architecture = (
+            record.plan.architecture if record.plan is not None else "unknown"
+        )
         raw = f"{task}-{dataset}-{backend}-{architecture}".lower()
         normalized = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
         return normalized or record.model_id
@@ -150,9 +158,13 @@ class ExperimentTracker:
             dataset_version = record.dataset.metadata.get("dataset_version")
             if dataset_version:
                 return str(dataset_version)
-        if context is not None and isinstance(context.metadata.get("dataset_spec"), dict):
-            dataset_version = context.metadata["dataset_spec"].get("metadata", {}).get(
-                "dataset_version"
+        if context is not None and isinstance(
+            context.metadata.get("dataset_spec"), dict
+        ):
+            dataset_version = (
+                context.metadata["dataset_spec"]
+                .get("metadata", {})
+                .get("dataset_version")
             )
             if dataset_version:
                 return str(dataset_version)

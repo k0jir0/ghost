@@ -24,7 +24,9 @@ class RunStore:
         )
 
     def upsert_run(self, record: ExperimentRunRecord) -> None:
-        self.metadata_store.save_record("experiment-runs", record.run_id, record.to_dict())
+        self.metadata_store.save_record(
+            "experiment-runs", record.run_id, record.to_dict()
+        )
 
     def get_run(self, run_id: str) -> ExperimentRunRecord | None:
         payload = self.metadata_store.load_record("experiment-runs", run_id)
@@ -55,7 +57,9 @@ class RunStore:
         return sorted(runs, key=lambda record: record.created_at)
 
     def compare_runs(self, run_ids: list[str]) -> dict[str, Any]:
-        runs = [record for run_id in run_ids if (record := self.get_run(run_id)) is not None]
+        runs = [
+            record for run_id in run_ids if (record := self.get_run(run_id)) is not None
+        ]
         if not runs:
             return {
                 "runs": [],
@@ -65,7 +69,9 @@ class RunStore:
             }
 
         baseline = runs[0]
-        best_accuracy_run = self._best_run(runs, "final_accuracy", higher_is_better=True)
+        best_accuracy_run = self._best_run(
+            runs, "final_accuracy", higher_is_better=True
+        )
         lowest_loss_run = self._best_run(runs, "final_loss", higher_is_better=False)
 
         deltas = []
@@ -103,7 +109,9 @@ class RunStore:
         }
 
     def upsert_artifact(self, artifact: ArtifactRecord) -> None:
-        self.metadata_store.save_record("artifacts", artifact.artifact_id, artifact.to_dict())
+        self.metadata_store.save_record(
+            "artifacts", artifact.artifact_id, artifact.to_dict()
+        )
 
     def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
         payload = self.metadata_store.load_record("artifacts", artifact_id)

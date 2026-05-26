@@ -35,7 +35,9 @@ class DatasetRegistry:
         version = self.version_for_spec(spec)
         source_uri = self.source_uri_for_spec(spec)
         record_id = self._record_id(spec.dataset_id, version)
-        existing_payload = self.metadata_store.load_record("dataset-manifests", record_id)
+        existing_payload = self.metadata_store.load_record(
+            "dataset-manifests", record_id
+        )
         existing = (
             DatasetManifest.from_dict(existing_payload)
             if isinstance(existing_payload, dict)
@@ -59,7 +61,9 @@ class DatasetRegistry:
                 **(spec.metadata if isinstance(spec.metadata, dict) else {}),
                 **(metadata or {}),
             },
-            created_at=existing.created_at if existing is not None else DatasetManifest(
+            created_at=existing.created_at
+            if existing is not None
+            else DatasetManifest(
                 dataset_id=spec.dataset_id,
                 version=version,
                 source_uri=source_uri,
@@ -91,7 +95,11 @@ class DatasetRegistry:
         return manifests
 
     def version_for_spec(self, spec: DatasetSpec) -> str:
-        metadata_version = spec.metadata.get("dataset_version") if isinstance(spec.metadata, dict) else None
+        metadata_version = (
+            spec.metadata.get("dataset_version")
+            if isinstance(spec.metadata, dict)
+            else None
+        )
         if metadata_version:
             return str(metadata_version)
 

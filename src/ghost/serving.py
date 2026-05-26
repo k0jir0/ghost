@@ -26,7 +26,6 @@ def create_serving_app(inference_service: InferenceService | None = None) -> Any
     service = inference_service or InferenceService()
     app = FastAPI(title="Ghost Serving API", version="1.0")
 
-    @app.post("/v1/models/{registry_id}:predict", response_model=OnlinePredictionResponse)
     async def predict_online(
         registry_id: str,
         request: OnlinePredictionRequest,
@@ -34,15 +33,24 @@ def create_serving_app(inference_service: InferenceService | None = None) -> Any
         payload = await service.predict_online(registry_id, request.features)
         return OnlinePredictionResponse.model_validate(payload)
 
-    @app.post(
-        "/v1/models/{registry_id}:predict-batch",
-        response_model=BatchPredictionResponse,
-    )
     async def predict_batch(
         registry_id: str,
         request: BatchPredictionRequest,
     ) -> BatchPredictionResponse:
         payload = await service.predict_batch(registry_id, request.inputs)
         return BatchPredictionResponse.model_validate(payload)
+
+    app.add_api_route(
+        "/v1/models/{registry_id}:predict",
+        predict_online,
+        methods=["POST"],
+        response_model=OnlinePredictionResponse,
+    )
+    app.add_api_route(
+        "/v1/models/{registry_id}:predict-batch",
+        predict_batch,
+        methods=["POST"],
+        response_model=BatchPredictionResponse,
+    )
 
     return app

@@ -76,7 +76,8 @@ class ModelObservability:
             predicted_classes=[
                 int(payload["predicted_class"])
                 for payload in predictions
-                if isinstance(payload, dict) and payload.get("predicted_class") is not None
+                if isinstance(payload, dict)
+                and payload.get("predicted_class") is not None
             ],
             input_mean=float(array.mean()) if array.size else 0.0,
             input_std=float(array.std()) if array.size else 0.0,

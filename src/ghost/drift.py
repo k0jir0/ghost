@@ -8,7 +8,7 @@ from typing import Any
 
 from ghost.config import GhostConfig, get_config
 from ghost.metadata_store import MetadataStore
-from ghost.observability import ModelObservability, PredictionEvent
+from ghost.observability import ModelObservability
 
 
 def _utc_now_iso() -> str:
@@ -61,7 +61,11 @@ class DriftDetector:
         *,
         mean_shift_threshold: float = 0.5,
     ) -> DriftReport:
-        events = [event for event in self.observability.list_events(registry_id) if event.success]
+        events = [
+            event
+            for event in self.observability.list_events(registry_id)
+            if event.success
+        ]
         if not events:
             report = DriftReport(
                 report_id=f"{registry_id}__drift",
@@ -75,7 +79,9 @@ class DriftDetector:
 
         baseline = events[0]
         current_events = events[-min(len(events), 10) :]
-        current_mean = sum(event.input_mean for event in current_events) / len(current_events)
+        current_mean = sum(event.input_mean for event in current_events) / len(
+            current_events
+        )
         mean_shift = abs(current_mean - baseline.input_mean)
         issues: list[str] = []
         status = "stable"
@@ -97,4 +103,6 @@ class DriftDetector:
         return report
 
     def _persist(self, report: DriftReport) -> None:
-        self.metadata_store.save_record("drift-reports", report.report_id, report.to_dict())
+        self.metadata_store.save_record(
+            "drift-reports", report.report_id, report.to_dict()
+        )
