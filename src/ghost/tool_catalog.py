@@ -60,7 +60,79 @@ class GetTrainingAnalysisArgs(BaseModel):
     model_id: str
 
 
+class GetRunArgs(BaseModel):
+    run_id: str
+
+
+class CompareRunsArgs(BaseModel):
+    run_ids: list[str] = Field(min_length=2, max_length=20)
+
+
+class RegisterModelArgs(BaseModel):
+    run_id: str
+    baseline_registry_id: str | None = None
+    min_accuracy: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_loss: float | None = Field(default=None, ge=0.0)
+    max_accuracy_drop: float = Field(default=0.05, ge=0.0, le=1.0)
+    max_loss_increase: float = Field(default=0.5, ge=0.0)
+    actor: str = "system"
+
+
+class ListRegisteredModelsArgs(BaseModel):
+    stage: str | None = None
+    model_id: str | None = None
+
+
+class PromoteModelArgs(BaseModel):
+    registry_id: str
+    stage: Literal["staging", "production", "archived"]
+    approved_by: str = "system"
+    alias: str | None = None
+
+
+class RejectModelArgs(BaseModel):
+    registry_id: str
+    reason: str = Field(min_length=1)
+    rejected_by: str = "system"
+
+
+class PredictOnlineArgs(BaseModel):
+    registry_id: str
+    features: list[Any] = Field(min_length=1)
+
+
+class PredictBatchArgs(BaseModel):
+    registry_id: str
+    inputs: list[Any] = Field(min_length=1)
+
+
+class GetModelObservabilityArgs(BaseModel):
+    registry_id: str
+
+
+class GetDriftReportArgs(BaseModel):
+    registry_id: str
+
+
+class GetDatasetManifestArgs(BaseModel):
+    dataset_id: str
+    version: str = "builtin-v1"
+
+
+class GetDatasetValidationReportArgs(BaseModel):
+    dataset_id: str
+    version: str = "builtin-v1"
+
+
 class ListModelsArgs(BaseModel):
+    pass
+
+
+class ListRunsArgs(BaseModel):
+    pass
+
+
+class ListDatasetManifestsArgs(BaseModel):
     pass
 
 
@@ -212,6 +284,104 @@ class ToolCatalog:
                     input_model=ListModelsArgs,
                     handler_name="_handle_list_models",
                     tags=("models", "listing"),
+                ),
+                ToolSpec(
+                    name="list_runs",
+                    description="List persisted training orchestration runs",
+                    input_model=ListRunsArgs,
+                    handler_name="_handle_list_runs",
+                    tags=("runs", "orchestration", "listing"),
+                ),
+                ToolSpec(
+                    name="get_run",
+                    description="Get a persisted training orchestration run by id",
+                    input_model=GetRunArgs,
+                    handler_name="_handle_get_run",
+                    tags=("runs", "orchestration"),
+                ),
+                ToolSpec(
+                    name="compare_runs",
+                    description="Compare persisted experiment runs by metrics and lineage metadata",
+                    input_model=CompareRunsArgs,
+                    handler_name="_handle_compare_runs",
+                    tags=("runs", "comparison", "experiments"),
+                ),
+                ToolSpec(
+                    name="register_model",
+                    description="Register a checkpointed run as a versioned model candidate",
+                    input_model=RegisterModelArgs,
+                    handler_name="_handle_register_model",
+                    tags=("registry", "models", "create"),
+                ),
+                ToolSpec(
+                    name="list_registered_models",
+                    description="List registered model versions and promotion stages",
+                    input_model=ListRegisteredModelsArgs,
+                    handler_name="_handle_list_registered_models",
+                    tags=("registry", "models", "listing"),
+                ),
+                ToolSpec(
+                    name="promote_model",
+                    description="Promote a registered model to staging, production, or archived",
+                    input_model=PromoteModelArgs,
+                    handler_name="_handle_promote_model",
+                    tags=("registry", "models", "promotion"),
+                ),
+                ToolSpec(
+                    name="reject_model",
+                    description="Reject a registered model candidate and record the reason",
+                    input_model=RejectModelArgs,
+                    handler_name="_handle_reject_model",
+                    tags=("registry", "models", "rejection"),
+                ),
+                ToolSpec(
+                    name="predict_online",
+                    description="Run an online prediction against a promoted registry model",
+                    input_model=PredictOnlineArgs,
+                    handler_name="_handle_predict_online",
+                    tags=("inference", "serving", "prediction"),
+                ),
+                ToolSpec(
+                    name="predict_batch",
+                    description="Run batch predictions against a promoted registry model",
+                    input_model=PredictBatchArgs,
+                    handler_name="_handle_predict_batch",
+                    tags=("inference", "serving", "batch"),
+                ),
+                ToolSpec(
+                    name="get_model_observability",
+                    description="Get aggregate prediction observability for a served registry model",
+                    input_model=GetModelObservabilityArgs,
+                    handler_name="_handle_get_model_observability",
+                    tags=("observability", "inference", "monitoring"),
+                ),
+                ToolSpec(
+                    name="get_drift_report",
+                    description="Get a drift report derived from served prediction events",
+                    input_model=GetDriftReportArgs,
+                    handler_name="_handle_get_drift_report",
+                    tags=("drift", "monitoring", "inference"),
+                ),
+                ToolSpec(
+                    name="list_dataset_manifests",
+                    description="List persisted dataset manifests",
+                    input_model=ListDatasetManifestsArgs,
+                    handler_name="_handle_list_dataset_manifests",
+                    tags=("datasets", "manifests", "listing"),
+                ),
+                ToolSpec(
+                    name="get_dataset_manifest",
+                    description="Get a dataset manifest by dataset id and version",
+                    input_model=GetDatasetManifestArgs,
+                    handler_name="_handle_get_dataset_manifest",
+                    tags=("datasets", "manifests"),
+                ),
+                ToolSpec(
+                    name="get_dataset_validation_report",
+                    description="Get a persisted dataset validation report by dataset id and version",
+                    input_model=GetDatasetValidationReportArgs,
+                    handler_name="_handle_get_dataset_validation_report",
+                    tags=("datasets", "validation"),
                 ),
                 ToolSpec(
                     name="list_training_tasks",

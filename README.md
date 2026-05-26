@@ -5,32 +5,35 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      GHOST PLATFORM                         │
-├─────────────────────────────────────────────────────────────┤
-│  Agent + MCP Entry Points                                   │
-│  ├── TrainingAgent (TASKS.json queue, AGENT.json state)     │
-│  └── GhostMCPServer (tool transport + dispatch)             │
-├─────────────────────────────────────────────────────────────┤
-│  Application Services                                       │
-│  ├── planning.py        (recommendation-driven plans)       │
-│  ├── datasets.py        (dataset resolution + demo gating)  │
-│  ├── data_loading.py    (real dataset loading + batching)   │
-│  ├── orchestration.py   (run execution + resume flow)       │
-│  ├── task_queue.py      (shared JSON/markdown task store)   │
-│  ├── tool_catalog.py    (transport-independent tool specs)  │
-│  └── health_monitor.py  (resource-aware training signals)   │
-├─────────────────────────────────────────────────────────────┤
-│  Runtime + Backends                                         │
-│  ├── context.py / training.py                               │
-│  ├── pytorch_ops.py                                          │
-│  └── tensorflow_ops.py                                       │
-├─────────────────────────────────────────────────────────────┤
-│  Ollama Layer (ollama_client.py)                            │
-│  ├── Local LLM inference                                    │
-│  ├── Model recommendation engine                            │
-│  └── Training analysis from recorded metrics                │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                         GHOST PLATFORM                            │
+├────────────────────────────────────────────────────────────────────┤
+│  Agent + MCP Entry Points                                         │
+│  ├── TrainingAgent (TASKS.json queue, AGENT.json state)           │
+│  └── GhostMCPServer (tool transport + dispatch)                   │
+├────────────────────────────────────────────────────────────────────┤
+│  Data + Experiment Control Plane                                  │
+│  ├── datasets.py / data_loading.py / ingestion-ready registry     │
+│  ├── dataset_registry.py / data_validation.py                     │
+│  ├── orchestration.py / experiment_tracking.py / run_store.py     │
+│  ├── evaluation.py / model_registry.py / audit.py                 │
+│  └── task_queue.py / workflows.py / scheduler.py                  │
+├────────────────────────────────────────────────────────────────────┤
+│  Serving + Production Signals                                     │
+│  ├── inference.py / serving.py / prediction_schemas.py            │
+│  ├── observability.py / drift.py / alerts.py                      │
+│  └── auth.py / environment.py / deploy/                           │
+├────────────────────────────────────────────────────────────────────┤
+│  Runtime + Backends                                               │
+│  ├── context.py / training.py                                     │
+│  ├── pytorch_ops.py                                               │
+│  └── tensorflow_ops.py                                            │
+├────────────────────────────────────────────────────────────────────┤
+│  Ollama Layer (ollama_client.py)                                  │
+│  ├── Local LLM inference                                          │
+│  ├── Model recommendation engine                                  │
+│  └── Training analysis from recorded metrics                      │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
@@ -42,6 +45,11 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 - **Recommendation-Driven Planning** — The agent uses Ollama recommendations to select architecture and training hyperparameters before execution
 - **Real Dataset Runtime** — CIFAR-10, MNIST, and IMDB-review datasets now flow through a shared cached loader and batch provider instead of synthetic-only scaffolding
 - **Shared Service Layer** — Planning, dataset resolution, orchestration, and tool-catalog modules keep the agent and MCP server aligned
+- **Experiment Tracking** — Searchable persisted run records and artifact lineage now sit alongside orchestration metadata
+- **Registry + Gates** — Evaluation thresholds, draft/staging/production registry stages, approval metadata, and audit logging gate model promotion
+- **Serving Surface** — Registry-backed online and batch inference are available through `inference.py`, with an optional FastAPI app factory in `serving.py`
+- **Production Signals** — Prediction observability, drift reports, alerts, and drift-triggered retraining workflows are now first-class services
+- **Environment Isolation** — `environment.py`, `auth.py`, and `deploy/` define dev/staging/production separation and lightweight access-control primitives
 - **Explicit Demo Mode** — Synthetic training and evaluation data is disabled by default and must be opted into for scaffold/demo runs
 - **Health Monitoring** — GPU, memory, and cache monitoring with configurable thresholds
 - **Graceful Degradation** — Memory pressure automatically reduces training batch size before the run escalates
@@ -49,10 +57,10 @@ Ghost is an intelligent ML training and inference platform that combines **PyTor
 
 ## Recent Progress
 
-- Real dataset wiring now resolves dataset specs into backend-ready input shapes and feeds repeatable batches to both PyTorch and TensorFlow backends through `data_loading.py`.
-- The autonomous agent now stores machine-managed state in `AGENT.json`, defaults its queue to `TASKS.json`, and shares queue semantics with the MCP layer through `task_queue.py`.
-- MCP tool responses now use `structuredContent`, preserving object payloads instead of stringifying dictionaries into text.
-- The current regression baseline is `182 passed` across architecture, integration, and unit tests.
+- Dataset manifests, validation reports, searchable experiment runs, and artifact lineage are now persisted under the shared metadata store.
+- Models can now be evaluated, registered, promoted, rejected, and served from registry-managed versions.
+- Prediction traffic now records observability events, drift summaries, alerts, and drift-triggered retraining workflows.
+- The current regression baseline is the full green suite for the completed roadmap checkpoint.
 
 ## Quick Start
 
@@ -74,6 +82,9 @@ pip install -e .
 
 # Or install with development tooling
 pip install -e ".[dev]"
+
+# Or include the optional FastAPI serving surface
+pip install -e ".[serve]"
 
 # (Optional) Pull Ollama models
 ollama pull llama3
@@ -132,6 +143,21 @@ ghost/
 │       ├── data_loading.py       # Real dataset loading and batch provisioning
 │       ├── datasets.py           # Dataset resolution and demo-mode policy
 │       ├── health_monitor.py     # Resource monitoring and adaptive health checks
+│       ├── experiment_tracking.py# Searchable experiment lineage materialization
+│       ├── run_store.py          # Persistent experiment and artifact records
+│       ├── evaluation.py         # Threshold-based model evaluation gates
+│       ├── model_registry.py     # Versioned model registry and promotion states
+│       ├── inference.py          # Registry-backed online and batch prediction service
+│       ├── serving.py            # Optional FastAPI serving app factory
+│       ├── prediction_schemas.py # Prediction request/response schemas
+│       ├── observability.py      # Prediction event logging and aggregate metrics
+│       ├── drift.py              # Drift reports from production prediction history
+│       ├── alerts.py             # Alert derivation from observability + drift signals
+│       ├── retraining.py         # Retraining request creation from operational triggers
+│       ├── workflows.py          # Drift-triggered workflow records
+│       ├── scheduler.py          # Policy evaluation for retraining workflows
+│       ├── auth.py               # Token-based auth/authz helpers
+│       ├── environment.py        # Dev/staging/production directory profiles
 │       ├── logging.py            # Structured logging setup
 │       ├── mcp_server.py         # MCP server entry point and tool dispatch
 │       ├── ollama_client.py      # Ollama LLM client, recommendations, and analysis
@@ -152,6 +178,7 @@ ghost/
 ├── TASKS.json                   # Default object-backed training task queue
 ├── TASKS.md                     # Optional legacy markdown queue notes
 ├── AGENT.json                   # Object-backed agent runtime state
+├── deploy/                      # Environment-level deployment notes
 ├── start.sh                     # Linux/macOS startup script
 └── start.bat                    # Windows startup script
 ```
@@ -184,6 +211,20 @@ ghost/
 |------|-------------|
 | `get_training_status` | Get current training state, epochs completed, metrics count |
 | `list_models` | List all registered models with backend info |
+| `list_runs` | List persisted experiment and orchestration runs |
+| `get_run` | Inspect a persisted run with dataset/code/artifact lineage |
+| `compare_runs` | Compare historical runs by metrics and lineage |
+| `register_model` | Register a checkpointed run as a model candidate |
+| `list_registered_models` | List registry-managed model versions |
+| `promote_model` | Promote an evaluated model to staging or production |
+| `reject_model` | Reject a registry candidate with a reason |
+| `predict_online` | Serve one prediction from a promoted registry model |
+| `predict_batch` | Serve batch predictions from a promoted registry model |
+| `get_model_observability` | Summarize latency, error rate, and class usage for served traffic |
+| `get_drift_report` | Inspect drift reports derived from served traffic |
+| `list_dataset_manifests` | List persisted dataset manifests |
+| `get_dataset_manifest` | Inspect a dataset manifest by id and version |
+| `get_dataset_validation_report` | Inspect a persisted dataset validation report |
 | `list_training_tasks` | List queued agent tasks from the configured task queue |
 | `create_training_task` | Create a queued training task in the configured task queue |
 | `update_training_task` | Update task text or completion state in the configured task queue |
@@ -201,6 +242,20 @@ Ghost now exposes resource health through both the training pipeline and MCP lay
 - Health samples are cached for `HEALTH_CHECK_INTERVAL` seconds so the interval setting now controls real sampling cadence instead of acting as documentation only.
 - Cache directories are included in the health report so long-running sessions can inspect model and data footprint.
 - MCP tool responses populate `structuredContent`, so Ghost returns object payloads to compatible clients instead of stringifying dictionaries into text.
+
+## Production Stack Status
+
+Ghost now covers the full local production-ML-stack loop inside the repository:
+
+- versioned dataset manifests and validation reports
+- searchable experiment records and artifact lineage
+- evaluation-gated model registration and promotion
+- registry-backed online and batch inference
+- prediction observability, drift reporting, and alert derivation
+- drift-triggered retraining workflow creation
+- lightweight auth and environment separation primitives
+
+The current implementation is Ghost-native and local-first. For team or internet-facing deployment, pair these abstractions with external infrastructure such as Postgres, S3/MinIO, a production scheduler, and a real HTTP serving deployment.
 
 ## Configuration Reference
 

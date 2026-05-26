@@ -6,18 +6,23 @@ post-run analysis as a reusable application-layer service.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from ghost.config import GhostConfig, get_config
-from ghost.context import BackendType, ContextManager
+from ghost.context import BackendType, ContextManager, TrainingMetrics
 from ghost.datasets import DatasetResolver, DatasetSpec, dataset_input_shape
+from ghost.experiment_tracking import ExperimentTracker
 from ghost.logging import get_logger
+from ghost.metadata_store import MetadataStore
 from ghost.ollama_client import OllamaClient
 from ghost.planning import PlanningRequest, TrainingPlan, TrainingPlanner
 from ghost.pytorch_ops import PyTorchOps
+from ghost.run_store import RunStore
 from ghost.tensorflow_ops import TensorFlowOps
 from ghost.training import TrainingPipeline, TrainingResult
 
@@ -40,6 +45,13 @@ class TrainingRunRequest:
     allow_synthetic: bool = False
     recommendations: dict[str, Any] | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TrainingRunRequest:
+        return cls(**payload)
+
 
 @dataclass
 class TrainingRunRecord:
@@ -58,6 +70,146 @@ class TrainingRunRecord:
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "model_id": self.model_id,
+            "status": self.status,
+            "plan": self.plan.to_dict() if self.plan is not None else None,
+            "analysis": self.analysis,
+            "events": self.events,
+            "request": self.request.to_dict() if self.request is not None else None,
+            "dataset": asdict(self.dataset) if self.dataset is not None else None,
+            "result": _training_result_to_dict(self.result),
+            "error": self.error,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TrainingRunRecord:
+        return cls(
+            run_id=str(payload["run_id"]),
+            model_id=str(payload["model_id"]),
+            status=str(payload["status"]),
+            plan=_training_plan_from_dict(payload.get("plan")),
+            analysis=(
+                payload["analysis"] if isinstance(payload.get("analysis"), dict) else None
+            ),
+            events=(
+                payload["events"] if isinstance(payload.get("events"), list) else []
+            ),
+            request=(
+                TrainingRunRequest.from_dict(payload["request"])
+                if isinstance(payload.get("request"), dict)
+                else None
+            ),
+            dataset=(
+                DatasetSpec(**payload["dataset"])
+                if isinstance(payload.get("dataset"), dict)
+                else None
+            ),
+            result=_training_result_from_dict(payload.get("result")),
+            error=str(payload["error"]) if payload.get("error") is not None else None,
+            created_at=str(payload.get("created_at", _utc_now_iso())),
+            updated_at=str(payload.get("updated_at", _utc_now_iso())),
+        )
+
+
+def _training_plan_from_dict(payload: Any) -> TrainingPlan | None:
+    if not isinstance(payload, dict):
+        return None
+
+    tips = payload.get("tips", [])
+    raw_recommendations = payload.get("raw_recommendations", {})
+
+    return TrainingPlan(
+        task=str(payload["task"]),
+        backend=BackendType(str(payload["backend"])),
+        architecture=str(payload["architecture"]),
+        num_classes=int(payload["num_classes"]),
+        batch_size=int(payload["batch_size"]),
+        learning_rate=float(payload["learning_rate"]),
+        epochs=int(payload["epochs"]),
+        dataset=str(payload.get("dataset", "")),
+        optimizer=(
+            str(payload["optimizer"]) if payload.get("optimizer") is not None else None
+        ),
+        recommendation_source=str(payload.get("recommendation_source", "defaults")),
+        tips=[str(item) for item in tips] if isinstance(tips, list) else [],
+        raw_recommendations=(
+            raw_recommendations if isinstance(raw_recommendations, dict) else {}
+        ),
+    )
+
+
+def _training_result_to_dict(result: TrainingResult | None) -> dict[str, Any] | None:
+    if result is None:
+        return None
+
+    return {
+        "model_id": result.model_id,
+        "success": result.success,
+        "final_loss": result.final_loss,
+        "final_accuracy": result.final_accuracy,
+        "epochs_completed": result.epochs_completed,
+        "checkpoint_path": (
+            str(result.checkpoint_path) if result.checkpoint_path is not None else None
+        ),
+        "duration_seconds": result.duration_seconds,
+        "metrics_history": [asdict(metric) for metric in result.metrics_history],
+        "effective_batch_size": result.effective_batch_size,
+        "health_status": result.health_status,
+        "health_issues": result.health_issues,
+        "data_mode": result.data_mode,
+        "used_synthetic_data": result.used_synthetic_data,
+        "error": result.error,
+    }
+
+
+def _training_result_from_dict(payload: Any) -> TrainingResult | None:
+    if not isinstance(payload, dict):
+        return None
+
+    metrics_payload = payload.get("metrics_history", [])
+    metrics = [
+        metric if isinstance(metric, TrainingMetrics) else TrainingMetrics(**metric)
+        for metric in metrics_payload
+        if isinstance(metric, (dict, TrainingMetrics))
+    ]
+
+    checkpoint_value = payload.get("checkpoint_path")
+    checkpoint_path = Path(str(checkpoint_value)) if checkpoint_value else None
+
+    return TrainingResult(
+        model_id=str(payload["model_id"]),
+        success=bool(payload["success"]),
+        final_loss=float(payload["final_loss"]),
+        final_accuracy=(
+            float(payload["final_accuracy"])
+            if payload.get("final_accuracy") is not None
+            else None
+        ),
+        epochs_completed=int(payload.get("epochs_completed", 0)),
+        checkpoint_path=checkpoint_path,
+        duration_seconds=float(payload.get("duration_seconds", 0.0)),
+        metrics_history=metrics,
+        effective_batch_size=(
+            int(payload["effective_batch_size"])
+            if payload.get("effective_batch_size") is not None
+            else None
+        ),
+        health_status=str(payload.get("health_status", "unknown")),
+        health_issues=(
+            [str(item) for item in payload.get("health_issues", [])]
+            if isinstance(payload.get("health_issues", []), list)
+            else []
+        ),
+        data_mode=str(payload.get("data_mode", "unknown")),
+        used_synthetic_data=bool(payload.get("used_synthetic_data", False)),
+        error=str(payload["error"]) if payload.get("error") is not None else None,
+    )
+
 
 class TrainingOrchestrator:
     """Coordinate Ghost planning, training, and analysis."""
@@ -71,6 +223,9 @@ class TrainingOrchestrator:
         training_pipeline: TrainingPipeline | None = None,
         ollama_client: OllamaClient | None = None,
         backend_ops: dict[BackendType, Any] | None = None,
+        metadata_store: MetadataStore | None = None,
+        run_store: RunStore | None = None,
+        experiment_tracker: ExperimentTracker | None = None,
     ):
         self.config = config or get_config()
         self.context_manager = context_manager or ContextManager()
@@ -83,13 +238,22 @@ class TrainingOrchestrator:
         self.training_pipeline = training_pipeline or TrainingPipeline(
             self.context_manager
         )
+        self.metadata_store = metadata_store or MetadataStore(
+            self.config.data_cache_dir / "metadata"
+        )
+        self.run_store = run_store or RunStore(
+            config=self.config,
+            metadata_store=self.metadata_store,
+        )
+        self.experiment_tracker = experiment_tracker or ExperimentTracker(
+            run_store=self.run_store,
+        )
         self._backend_ops = backend_ops or {
             BackendType.PYTORCH: PyTorchOps(self.context_manager),
             BackendType.TENSORFLOW: TensorFlowOps(self.context_manager),
         }
 
-        runtime = self.context_manager.get_runtime_bucket("orchestration")
-        self._records: dict[str, TrainingRunRecord] = runtime.setdefault("runs", {})
+        self._records = self._load_records()
         logger.info("training_orchestrator_init")
 
     async def execute(self, request: TrainingRunRequest) -> TrainingRunRecord:
@@ -144,6 +308,7 @@ class TrainingOrchestrator:
             record.analysis = await self._analyze_result(record, result)
 
             if result.success:
+                await self._ensure_checkpoint_artifact(record, result)
                 record.status = "completed"
                 self._record_event(
                     record,
@@ -203,6 +368,7 @@ class TrainingOrchestrator:
             record.analysis = await self._analyze_result(record, result)
 
             if result.success:
+                await self._ensure_checkpoint_artifact(record, result)
                 record.status = "completed"
                 record.error = None
                 self._record_event(
@@ -230,6 +396,10 @@ class TrainingOrchestrator:
     def get_run(self, run_id: str) -> TrainingRunRecord | None:
         """Return a recorded run if present."""
         return self._records.get(run_id)
+
+    def list_runs(self) -> list[TrainingRunRecord]:
+        """Return all known runs ordered by creation time."""
+        return sorted(self._records.values(), key=lambda record: record.created_at)
 
     def _resolve_dataset(
         self,
@@ -361,6 +531,41 @@ class TrainingOrchestrator:
         self._record_event(record, "analysis_completed")
         return analysis
 
+    async def _ensure_checkpoint_artifact(
+        self,
+        record: TrainingRunRecord,
+        result: TrainingResult,
+    ) -> None:
+        if result.checkpoint_path is not None or record.plan is None:
+            return
+
+        ops = self._backend_ops[record.plan.backend]
+        save_checkpoint = getattr(ops, "save_checkpoint", None)
+        if save_checkpoint is None:
+            return
+
+        maybe_coro = save_checkpoint(record.model_id)
+        if not inspect.isawaitable(maybe_coro):
+            return
+
+        save_result = await maybe_coro
+        if save_result.get("status") != "success":
+            self._record_event(
+                record,
+                "checkpoint_save_failed",
+                error=save_result.get("message", "Checkpoint save failed"),
+            )
+            return
+
+        checkpoint_value = save_result.get("path")
+        if checkpoint_value:
+            result.checkpoint_path = Path(str(checkpoint_value))
+            self._record_event(
+                record,
+                "checkpoint_saved",
+                path=str(result.checkpoint_path),
+            )
+
     def _record_event(
         self,
         record: TrainingRunRecord,
@@ -375,6 +580,29 @@ class TrainingOrchestrator:
     def _persist(self, record: TrainingRunRecord) -> None:
         record.updated_at = _utc_now_iso()
         self._records[record.run_id] = record
+        self.metadata_store.save_record("runs", record.run_id, record.to_dict())
+        try:
+            self.experiment_tracker.record_training_run(
+                record,
+                context=self.context_manager.get_context(record.model_id),
+            )
+        except Exception as exc:
+            logger.warning(
+                "experiment_tracking_failed",
+                run_id=record.run_id,
+                error=str(exc),
+            )
+
+    def _load_records(self) -> dict[str, TrainingRunRecord]:
+        records: dict[str, TrainingRunRecord] = {}
+        for payload in self.metadata_store.list_records("runs"):
+            try:
+                record = TrainingRunRecord.from_dict(payload)
+            except Exception as exc:
+                logger.warning("run_record_load_failed", error=str(exc))
+                continue
+            records[record.run_id] = record
+        return records
 
     def _generate_model_id(self) -> str:
         return f"model_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"

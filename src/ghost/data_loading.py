@@ -9,6 +9,8 @@ import numpy as np
 
 from ghost.config import GhostConfig, get_config
 from ghost.context import ContextManager
+from ghost.data_validation import DatasetValidator
+from ghost.dataset_registry import DatasetRegistry
 from ghost.datasets import DatasetSpec
 from ghost.logging import get_logger
 
@@ -34,20 +36,28 @@ class LoadedDataset:
 class RealDatasetLoader:
     """Load real datasets backed by the local data cache."""
 
-    def __init__(self, config: GhostConfig | None = None):
+    def __init__(
+        self,
+        config: GhostConfig | None = None,
+        dataset_registry: DatasetRegistry | None = None,
+        dataset_validator: DatasetValidator | None = None,
+    ):
         self.config = config or get_config()
+        self.dataset_registry = dataset_registry or DatasetRegistry(config=self.config)
+        self.dataset_validator = dataset_validator or DatasetValidator(config=self.config)
         self._cache: dict[str, LoadedDataset] = {}
 
     def load(self, spec: DatasetSpec) -> LoadedDataset:
         """Return cached dataset arrays for a known non-synthetic dataset."""
         cached = self._cache.get(spec.dataset_id)
-        if cached is not None:
-            return cached
-
         if spec.synthetic:
             raise ValueError(
                 "Synthetic dataset specs do not require real dataset loading."
             )
+
+        if cached is not None:
+            self._record_dataset_metadata(spec, cached)
+            return cached
 
         self._ensure_cache_home()
 
@@ -61,8 +71,30 @@ class RealDatasetLoader:
             raise KeyError(f"Unsupported dataset id: {spec.dataset_id}")
 
         self._cache[spec.dataset_id] = dataset
+        self._record_dataset_metadata(spec, dataset)
         logger.info("dataset_loaded", dataset_id=spec.dataset_id)
         return dataset
+
+    def _record_dataset_metadata(
+        self,
+        spec: DatasetSpec,
+        dataset: LoadedDataset,
+    ) -> None:
+        dataset_version = self.dataset_registry.version_for_spec(spec)
+        report = self.dataset_validator.validate_loaded_dataset(
+            spec,
+            dataset,
+            dataset_version=dataset_version,
+        )
+        self.dataset_registry.upsert_manifest(
+            spec,
+            validation_status=report.status,
+            metadata={
+                "validation_report_id": report.report_id,
+                "train_samples": report.stats.get("train_samples", 0),
+                "eval_samples": report.stats.get("eval_samples", 0),
+            },
+        )
 
     def _ensure_cache_home(self) -> None:
         keras_home = self.config.data_cache_dir / "keras"

@@ -1,0 +1,398 @@
+Ghost Production ML Stack Roadmap
+Date: 2026-05-26
+
+Completion Update
+- Phases 0 through 7 now have concrete Ghost-native implementations in the repository.
+- The current stack includes governed dataset metadata, experiment tracking, model evaluation and registry promotion, registry-backed inference, prediction observability and drift reporting, retraining workflow services, and lightweight auth/environment primitives.
+- Remaining future work is now about hardening and scaling these layers with external infrastructure, not about missing stack categories inside Ghost itself.
+
+Purpose
+- Map the current Ghost platform against a standard production ML stack.
+- Identify which layers already exist, which are partial, and which are missing.
+- Provide a phased implementation roadmap to evolve Ghost from a local applied ML training platform into a full production ML stack.
+
+Current Positioning
+- Ghost is currently strongest as a local training-control platform.
+- It already has meaningful planning, dataset resolution, real dataset loading for a fixed dataset set, backend training orchestration, checkpointing, health-aware training, structured MCP tooling, and an autonomous task-driven agent.
+- It is not yet a full production ML stack because it lacks several operational layers that matter after training: feature management, model registry, deployment/serving, drift monitoring, automated retraining, production governance, and environment-aware rollout control.
+
+Production ML Stack Mapping
+
+1. Data ingestion, storage, and dataset access
+Status: Partial
+What Ghost has
+- Configurable local model and data cache directories.
+- Dataset resolution through datasets.py.
+- Real dataset loading for CIFAR-10, MNIST, and IMDB reviews through data_loading.py.
+- Shared dataset batch provisioning for PyTorch and TensorFlow through DatasetBatchProvider.
+What is missing
+- Connectors to external data systems (databases, object stores, streams, warehouses).
+- Dataset manifests with immutable version IDs.
+- Data lineage and provenance tracking.
+- Label management and human annotation workflow.
+- Dataset quality contracts, schema evolution handling, and ingestion failure policy.
+
+2. Data validation and quality controls
+Status: Partial
+What Ghost has
+- Explicit fail-closed behavior when no real dataset pipeline exists unless synthetic mode is intentionally enabled.
+- Strong runtime argument validation at the MCP boundary with Pydantic.
+What is missing
+- Formal dataset schema validation.
+- Distribution validation and anomaly detection.
+- Missing-value, class-balance, and label-integrity checks.
+- Persisted validation reports tied to dataset versions.
+
+3. Feature engineering and feature store
+Status: Missing
+What Ghost has
+- Minimal in-loader preprocessing such as normalization, padding, and shape handling.
+What is missing
+- Reusable feature definitions.
+- Offline/online feature parity.
+- Feature lineage, backfills, and materialization.
+- Point-in-time correct feature retrieval.
+- A feature store or even a lightweight feature registry.
+
+4. Experiment tracking and run metadata
+Status: Partial
+What Ghost has
+- Context objects with model state, metrics, and checkpoint metadata.
+- Training plans and recommendations attached to runtime metadata.
+- Orchestration records for execute/resume flows.
+- Strong test coverage around the current control plane.
+What is missing
+- Persistent experiment database with searchable historical runs.
+- Run comparison views and experiment grouping.
+- First-class artifact lineage linking code version, dataset version, plan, metrics, and model artifact.
+- Reproducibility bundles for full reruns.
+
+5. Training orchestration and execution
+Status: Has
+What Ghost has
+- TrainingPipeline for unified backend execution.
+- TrainingOrchestrator for execute/resume logic.
+- PyTorch and TensorFlow backend adapters.
+- Health-aware batch-size degradation.
+- Checkpoint save/load paths for both backends.
+- Task-driven agent and MCP surfaces to trigger work.
+Constraints
+- The current implementation is local-process oriented, not cluster/job-runner oriented.
+
+6. Model evaluation and release gates
+Status: Partial
+What Ghost has
+- Train/evaluate flows in both backends.
+- Training analysis via Ollama from recorded metrics.
+- Some architecture- and behavior-level tests.
+What is missing
+- Explicit evaluation suites with threshold gates.
+- Dataset-split governance and holdout discipline.
+- Bias/fairness checks.
+- Regression checks against previous approved models.
+- Approval workflow before a model can be promoted to a serving environment.
+
+7. Model artifact management and registry
+Status: Partial
+What Ghost has
+- Checkpoint persistence.
+- Context state that records checkpoint paths.
+- Configured artifact directory discipline.
+What is missing
+- Versioned model registry with stages such as draft, staging, production, archived.
+- Model cards and approval metadata.
+- Registry queries and lineage navigation.
+- Alias management such as current-production or current-canary.
+
+8. Inference serving and deployment
+Status: Missing
+What Ghost has
+- An MCP server for control-plane operations.
+- Training-side primitives that could support later prediction APIs.
+What is missing
+- Dedicated prediction APIs.
+- Model-loading serving workers.
+- Batch inference pipelines.
+- Online inference endpoints, request/response schemas, and latency budgets.
+- Deployment packaging and environment-aware rollout strategy.
+
+9. Monitoring, observability, and alerting
+Status: Partial
+What Ghost has
+- HealthMonitor for system and resource checks.
+- Training-time health status and issues in results.
+- Structured logging.
+What is missing
+- Prediction monitoring.
+- Data drift and concept drift detection.
+- Production SLA dashboards.
+- Alert routing and incident thresholds.
+- Distributed tracing and service-level telemetry.
+
+10. Retraining automation and workflow scheduling
+Status: Partial
+What Ghost has
+- Task queue abstraction and agent polling loop.
+- Execute/resume flow.
+What is missing
+- Scheduled retraining policies.
+- Triggering on drift, freshness, or business events.
+- Workflow retry/backoff semantics across process boundaries.
+- Dependency-aware DAG execution.
+- Backfill and replay workflows.
+
+11. Security, governance, and compliance
+Status: Partial
+What Ghost has
+- Path confinement for checkpoint storage.
+- Some safe-by-default runtime decisions.
+- Local config separation via .env.
+What is missing
+- Authentication and authorization.
+- Secrets management.
+- Audit trail for task changes, model promotion, and inference access.
+- Compliance controls and approval workflow.
+- Tenant or environment isolation.
+
+12. CI/CD, packaging, and platform operations
+Status: Partial
+What Ghost has
+- Test suite with architecture, unit, and integration coverage.
+- Linting, typing, coverage, and CI checks documented in README.
+What is missing
+- Containerized deployment artifacts.
+- Environment promotion pipeline.
+- Infrastructure as code.
+- Deployment health checks and rollback automation.
+- Staging and production environment definitions.
+
+Summary By Status
+Has
+- Training orchestration and backend execution.
+- Real dataset-backed local training for a fixed dataset set.
+- Structured control-plane tooling through MCP and the autonomous agent.
+- Checkpoint save/load support.
+
+Partial
+- Data layer.
+- Data validation.
+- Experiment tracking.
+- Evaluation.
+- Artifact management.
+- Monitoring.
+- Retraining automation.
+- Security/governance.
+- CI/CD and platform operations.
+
+Missing
+- Feature store / feature registry.
+- Model registry.
+- Dedicated inference serving.
+- Drift monitoring tied to production predictions.
+- Deployment rollout control.
+
+Recommended Architecture Direction
+- Keep Ghost as the orchestration and ML control plane.
+- Keep planning, orchestration, dataset resolution, task queue, and MCP as the core Ghost differentiators.
+- Do not build every platform primitive from scratch if mature infrastructure exists.
+- Prefer a staged approach:
+  - Ghost-native abstractions first.
+  - Pluggable backing services second.
+  - Production scale and governance third.
+
+Recommended Supporting Stack
+- Metadata database: SQLite for dev, Postgres for shared and production environments.
+- Artifact store: local filesystem for dev, S3 or MinIO-compatible object storage for production.
+- Serving API: FastAPI with explicit prediction schemas.
+- Workflow scheduler: APScheduler for local dev, Prefect or Dagster for production orchestration.
+- Metrics and tracing: Prometheus plus OpenTelemetry.
+- Data validation: Pandera or Great Expectations.
+- Alerting: Prometheus Alertmanager or equivalent.
+- Registry path: either a lightweight Ghost-native registry backed by Postgres or integration with MLflow.
+
+Roadmap
+
+Phase 0 - Stabilize the current foundation
+Goal
+- Make the existing training platform easier to extend without changing its external behavior.
+Deliverables
+- Introduce explicit schemas for run records, dataset manifests, artifact metadata, and model registry records.
+- Persist orchestration run records outside transient runtime buckets.
+- Add a lightweight metadata storage layer abstraction under src/ghost.
+- Separate control-plane metadata from backend-specific runtime objects more cleanly.
+Suggested modules
+- src/ghost/storage.py
+- src/ghost/metadata_store.py
+- src/ghost/schemas.py
+Success criteria
+- Runs, checkpoints, plans, and dataset references can be listed after process restart.
+Status
+- Completed with `metadata_store.py`, persisted orchestration runs, shared schemas, and restart-safe listing paths.
+
+Phase 1 - Build a governed data layer
+Goal
+- Move from fixed built-in dataset loading to traceable, versioned dataset ingestion.
+Deliverables
+- Add dataset manifest objects with dataset_id, version, source_uri, schema, split info, and validation status.
+- Add ingestion interfaces for filesystem and object-store-backed datasets.
+- Add dataset validation reports and fail/publish semantics.
+- Store dataset lineage in metadata storage.
+Suggested modules
+- src/ghost/dataset_registry.py
+- src/ghost/data_validation.py
+- src/ghost/ingestion.py
+Success criteria
+- Every training run references an immutable dataset version and a validation report.
+Status
+- Completed with dataset manifests, validation reports, loader-side metadata persistence, and MCP inspection tools.
+
+Phase 2 - Add experiment tracking and lineage
+Goal
+- Make training runs searchable, comparable, and reproducible.
+Deliverables
+- Persist runs, metrics, configs, recommendations, dataset versions, and artifact references in a run store.
+- Add experiment and run query MCP tools.
+- Add artifact lineage linking model checkpoints to code version, dataset version, and plan.
+Suggested modules
+- src/ghost/experiment_tracking.py
+- src/ghost/run_store.py
+New MCP tools
+- list_runs
+- get_run
+- compare_runs
+Success criteria
+- A user can answer: which dataset, code version, plan, and metrics produced this model artifact?
+Status
+- Completed with `run_store.py`, `experiment_tracking.py`, artifact lineage, and `compare_runs`.
+
+Phase 3 - Add evaluation gates and registry promotion
+Goal
+- Prevent unreviewed models from becoming deployable artifacts.
+Deliverables
+- Add evaluation suites with threshold checks.
+- Add regression comparisons against baseline or current production model.
+- Create a model registry with promotion states.
+- Add approval metadata and audit entries.
+Suggested modules
+- src/ghost/evaluation.py
+- src/ghost/model_registry.py
+- src/ghost/audit.py
+New MCP tools
+- register_model
+- list_registered_models
+- promote_model
+- reject_model
+Success criteria
+- No model can advance to production-ready status without passing evaluation gates and receiving explicit promotion.
+Status
+- Completed with `evaluation.py`, `model_registry.py`, `audit.py`, and MCP registry promotion tools.
+
+Phase 4 - Add inference serving
+Goal
+- Turn Ghost from a training platform into an end-to-end ML application platform.
+Deliverables
+- Add prediction service interfaces independent of training backends.
+- Add model loading and inference runners.
+- Implement batch and online inference APIs.
+- Add request validation and response schemas.
+Suggested modules
+- src/ghost/inference.py
+- src/ghost/serving.py
+- src/ghost/prediction_schemas.py
+Recommended service
+- FastAPI service that loads registry-approved models.
+Success criteria
+- Ghost can serve predictions from registry-approved models with versioned APIs.
+Status
+- Completed with `inference.py`, `prediction_schemas.py`, `serving.py`, and MCP prediction tools.
+
+Phase 5 - Add production monitoring and drift detection
+Goal
+- Detect degradation after deployment, not just during training.
+Deliverables
+- Track inference latency, throughput, error rate, and model version usage.
+- Add feature/payload drift detection.
+- Add prediction distribution monitoring and retrievable monitoring summaries.
+- Add alert thresholds and notification hooks.
+Suggested modules
+- src/ghost/observability.py
+- src/ghost/drift.py
+- src/ghost/alerts.py
+New MCP tools
+- get_model_observability
+- get_drift_report
+Success criteria
+- Ghost can detect when a deployed model is unhealthy, stale, or drifting.
+Status
+- Completed with prediction event logging, drift reports, and alert derivation services.
+
+Phase 6 - Add retraining workflows and scheduled automation
+Goal
+- Make model refresh repeatable and triggerable from operational signals.
+Deliverables
+- Add scheduled workflows and drift-triggered retraining requests.
+- Add workflow retry policy and run-state transitions.
+- Add promotion pipelines that can re-train, evaluate, and register automatically.
+Suggested modules
+- src/ghost/workflows.py
+- src/ghost/retraining.py
+- src/ghost/scheduler.py
+Success criteria
+- Ghost can automatically queue retraining and promotion workflows from policy, not only manual task creation.
+Status
+- Completed with retraining requests, workflow records, and policy evaluation via `scheduler.py`.
+
+Phase 7 - Add security, environments, and deployment operations
+Goal
+- Make Ghost safe to run beyond a single trusted local environment.
+Deliverables
+- Add authn/authz around MCP and future serving APIs.
+- Add secrets handling for remote data and artifact stores.
+- Introduce environment separation: dev, staging, production.
+- Add deployment packaging, health checks, rollback procedures, and infrastructure definitions.
+Suggested modules
+- src/ghost/auth.py
+- src/ghost/environment.py
+- deploy/
+Success criteria
+- Ghost can be deployed across environments with isolated config, auditable access, and rollback-ready releases.
+Status
+- Completed at the repository level with `auth.py`, `environment.py`, and deployment/environment notes under `deploy/`.
+
+Implementation Order Recommendation
+1. Phase 0 first because persistent metadata is the foundation for every later layer.
+2. Phase 1 and Phase 2 next because dataset lineage and experiment lineage must exist before a real registry is trustworthy.
+3. Phase 3 before Phase 4 so inference only serves approved models.
+4. Phase 5 and Phase 6 after serving exists, because drift and automated retraining depend on deployed predictions.
+5. Phase 7 continuously, but enforce it fully before any externalized production deployment.
+
+Near-Term Backlog For The Next 4 Iterations
+Iteration 1
+- Add persistent metadata store abstraction.
+- Persist orchestration runs and experiment metadata.
+- Add list_runs and get_run tooling.
+
+Iteration 2
+- Add dataset manifests and validation reports.
+- Refactor data_loading.py to consume dataset versions instead of hard-coded dataset IDs only.
+- Add ingestion abstraction for local files and object storage.
+
+Iteration 3
+- Add registry records and evaluation gates.
+- Promote checkpoint artifacts into registry-managed model versions.
+- Add registry MCP tools.
+
+Iteration 4
+- Add a dedicated inference service with one offline batch prediction path and one online prediction path.
+- Add production telemetry and basic drift reports.
+
+Definition of Full-Stack Completion For Ghost
+Ghost can be called a full production ML stack when it can do all of the following end to end:
+- ingest and validate versioned data,
+- define or retrieve stable features,
+- train reproducible experiments,
+- register and promote models under approval policy,
+- serve predictions through stable APIs,
+- monitor data and prediction health in production,
+- trigger retraining from policy or drift,
+- and operate across environments with security, auditability, and rollback controls.

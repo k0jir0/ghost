@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ghost.context import BackendType, ContextManager, TrainingMetrics
+from ghost.metadata_store import MetadataStore
+from ghost.orchestration import TrainingRunRecord, TrainingRunRequest
+from ghost.planning import TrainingPlan
+from ghost.run_store import RunStore
+from ghost.schemas import ArtifactRecord, DatasetManifest, ExperimentRunRecord
 from ghost.task_queue import TaskQueueStore
+from ghost.training import TrainingResult
 
 
 # ---------------------------------------------------------------------------
@@ -20,6 +26,7 @@ def _make_server(tmp_data_dir: Path) -> Any:
     """Build a GhostMCPServer with mocked ML backends and Ollama."""
     cm = ContextManager(storage_path=tmp_data_dir)
     task_queue = TaskQueueStore(tmp_data_dir / "TASKS.json")
+    metadata_store = MetadataStore(tmp_data_dir / "metadata")
 
     pytorch_ops = MagicMock()
     tensorflow_ops = MagicMock()
@@ -91,6 +98,7 @@ def _make_server(tmp_data_dir: Path) -> Any:
             ollama_client=ollama_client,
             health_monitor=health_monitor,
             task_queue=task_queue,
+            metadata_store=metadata_store,
         )
         # Inject mocked ops directly
         server.pytorch_ops = pytorch_ops
@@ -98,6 +106,7 @@ def _make_server(tmp_data_dir: Path) -> Any:
         server.ollama_client = ollama_client
         server.health_monitor = health_monitor
         server.task_queue = task_queue
+        server.metadata_store = metadata_store
 
     return server, cm, pytorch_ops, tensorflow_ops, ollama_client, health_monitor
 
@@ -326,6 +335,354 @@ class TestTaskQueueTools:
         assert remaining["queue"] == []
 
 
+class TestRunMetadataTools:
+    @pytest.mark.asyncio
+    async def test_list_runs_returns_persisted_run_records(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        record = TrainingRunRecord(
+            run_id="run-1",
+            model_id="model-1",
+            status="completed",
+            plan=TrainingPlan(
+                task="Train MLP",
+                backend=BackendType.PYTORCH,
+                architecture="mlp",
+                num_classes=10,
+                batch_size=32,
+                learning_rate=0.001,
+                epochs=3,
+            ),
+            analysis=None,
+            events=[],
+            request=TrainingRunRequest(task="Train MLP", model_id="model-1"),
+            result=TrainingResult(
+                model_id="model-1",
+                success=True,
+                final_loss=0.1,
+                epochs_completed=3,
+            ),
+        )
+        server.metadata_store.save_record("runs", record.run_id, record.to_dict())
+
+        result = await server._handle_tool("list_runs", {})
+
+        assert result["count"] == 1
+        assert result["runs"][0]["run_id"] == "run-1"
+
+    @pytest.mark.asyncio
+    async def test_get_run_returns_persisted_run_by_id(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        record = TrainingRunRecord(
+            run_id="run-1",
+            model_id="model-1",
+            status="completed",
+            plan=TrainingPlan(
+                task="Train MLP",
+                backend=BackendType.PYTORCH,
+                architecture="mlp",
+                num_classes=10,
+                batch_size=32,
+                learning_rate=0.001,
+                epochs=3,
+            ),
+            analysis=None,
+            events=[],
+            request=TrainingRunRequest(task="Train MLP", model_id="model-1"),
+            result=TrainingResult(
+                model_id="model-1",
+                success=True,
+                final_loss=0.1,
+                epochs_completed=3,
+            ),
+        )
+        server.metadata_store.save_record("runs", record.run_id, record.to_dict())
+
+        result = await server._handle_tool("get_run", {"run_id": "run-1"})
+
+        assert result["run"]["run_id"] == "run-1"
+        assert result["run"]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_compare_runs_returns_metric_summary(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        run_store = RunStore(metadata_store=server.metadata_store)
+        run_store.upsert_run(
+            ExperimentRunRecord(
+                run_id="run-1",
+                experiment_id="exp-1",
+                model_id="model-1",
+                status="completed",
+                backend="pytorch",
+                architecture="mlp",
+                dataset_id="mnist",
+                dataset_version="builtin-v1",
+                metrics={"final_accuracy": 0.8, "final_loss": 0.4},
+            )
+        )
+        run_store.upsert_run(
+            ExperimentRunRecord(
+                run_id="run-2",
+                experiment_id="exp-1",
+                model_id="model-2",
+                status="completed",
+                backend="pytorch",
+                architecture="mlp",
+                dataset_id="mnist",
+                dataset_version="builtin-v1",
+                metrics={"final_accuracy": 0.9, "final_loss": 0.2},
+            )
+        )
+
+        result = await server._handle_tool(
+            "compare_runs",
+            {"run_ids": ["run-1", "run-2"]},
+        )
+
+        assert result["count"] == 2
+        assert result["summary"]["best_accuracy_run_id"] == "run-2"
+
+
+class TestModelRegistryTools:
+    @pytest.mark.asyncio
+    async def test_register_and_promote_model(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        run_store = RunStore(metadata_store=server.metadata_store)
+        run_store.upsert_run(
+            ExperimentRunRecord(
+                run_id="run-1",
+                experiment_id="exp-1",
+                model_id="model-1",
+                status="completed",
+                backend="pytorch",
+                architecture="mlp",
+                dataset_id="mnist",
+                dataset_version="builtin-v1",
+                input_shape=[1, 28, 28],
+                num_classes=10,
+                metrics={"final_accuracy": 0.9, "final_loss": 0.2},
+            )
+        )
+        run_store.upsert_artifact(
+            ArtifactRecord(
+                artifact_id="run-1__checkpoint",
+                artifact_type="checkpoint",
+                uri=str(tmp_data_dir / "model-1.pt"),
+                run_id="run-1",
+                model_id="model-1",
+            )
+        )
+
+        created = await server._handle_tool(
+            "register_model",
+            {"run_id": "run-1", "min_accuracy": 0.8, "max_loss": 0.3},
+        )
+        promoted = await server._handle_tool(
+            "promote_model",
+            {
+                "registry_id": created["model"]["registry_id"],
+                "stage": "production",
+                "approved_by": "tester",
+            },
+        )
+
+        assert created["model"]["stage"] == "draft"
+        assert promoted["model"]["stage"] == "production"
+        assert "current-production" in promoted["model"]["aliases"]
+
+    @pytest.mark.asyncio
+    async def test_reject_model_marks_candidate_rejected(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        run_store = RunStore(metadata_store=server.metadata_store)
+        run_store.upsert_run(
+            ExperimentRunRecord(
+                run_id="run-2",
+                experiment_id="exp-2",
+                model_id="model-2",
+                status="completed",
+                backend="pytorch",
+                architecture="mlp",
+                metrics={"final_accuracy": 0.95, "final_loss": 0.1},
+            )
+        )
+        run_store.upsert_artifact(
+            ArtifactRecord(
+                artifact_id="run-2__checkpoint",
+                artifact_type="checkpoint",
+                uri=str(tmp_data_dir / "model-2.pt"),
+                run_id="run-2",
+                model_id="model-2",
+            )
+        )
+        created = await server._handle_tool(
+            "register_model",
+            {"run_id": "run-2", "min_accuracy": 0.8},
+        )
+
+        rejected = await server._handle_tool(
+            "reject_model",
+            {
+                "registry_id": created["model"]["registry_id"],
+                "reason": "baseline changed",
+                "rejected_by": "tester",
+            },
+        )
+
+        assert rejected["model"]["stage"] == "rejected"
+        assert rejected["model"]["metadata"]["rejection_reason"] == "baseline changed"
+
+
+class TestInferenceTools:
+    @pytest.mark.asyncio
+    async def test_predict_tools_route_through_inference_service(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        server.inference_service = MagicMock()
+        server.inference_service.predict_online = AsyncMock(
+            return_value={
+                "registry_id": "model-1__v1",
+                "model_id": "model-1",
+                "prediction": {"predicted_class": 1, "scores": [0.1, 0.9]},
+            }
+        )
+        server.inference_service.predict_batch = AsyncMock(
+            return_value={
+                "registry_id": "model-1__v1",
+                "model_id": "model-1",
+                "predictions": [
+                    {"predicted_class": 1, "scores": [0.1, 0.9]},
+                    {"predicted_class": 0, "scores": [0.7, 0.3]},
+                ],
+                "count": 2,
+            }
+        )
+
+        online = await server._handle_tool(
+            "predict_online",
+            {"registry_id": "model-1__v1", "features": [1.0, 2.0]},
+        )
+        batch = await server._handle_tool(
+            "predict_batch",
+            {"registry_id": "model-1__v1", "inputs": [[1.0, 2.0], [3.0, 4.0]]},
+        )
+
+        assert online["prediction"]["predicted_class"] == 1
+        assert batch["count"] == 2
+
+
+class TestObservabilityTools:
+    @pytest.mark.asyncio
+    async def test_observability_and_drift_tools(self, tmp_data_dir: Path) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        server.observability.record_prediction(
+            "model-1__v1",
+            "model-1",
+            latency_ms=20.0,
+            batch_size=1,
+            success=True,
+            inputs=[[0.0, 0.0]],
+            predictions=[{"predicted_class": 1, "scores": [0.1, 0.9]}],
+        )
+        server.observability.record_prediction(
+            "model-1__v1",
+            "model-1",
+            latency_ms=25.0,
+            batch_size=1,
+            success=True,
+            inputs=[[10.0, 10.0]],
+            predictions=[{"predicted_class": 1, "scores": [0.1, 0.9]}],
+        )
+
+        observability = await server._handle_tool(
+            "get_model_observability",
+            {"registry_id": "model-1__v1"},
+        )
+        drift = await server._handle_tool(
+            "get_drift_report",
+            {"registry_id": "model-1__v1"},
+        )
+
+        assert observability["observability"]["request_count"] == 2
+        assert drift["report"]["sample_count"] == 2
+
+
+class TestDatasetMetadataTools:
+    @pytest.mark.asyncio
+    async def test_list_dataset_manifests_returns_persisted_manifests(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        manifest = DatasetManifest(
+            dataset_id="mnist",
+            version="builtin-v1",
+            source_uri="builtin://mnist",
+            validation_status="passed",
+        )
+        server.metadata_store.save_record(
+            "dataset-manifests",
+            "mnist@builtin-v1",
+            manifest.to_dict(),
+        )
+
+        result = await server._handle_tool("list_dataset_manifests", {})
+
+        assert result["count"] == 1
+        assert result["manifests"][0]["dataset_id"] == "mnist"
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_manifest_returns_manifest(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        manifest = DatasetManifest(
+            dataset_id="mnist",
+            version="builtin-v1",
+            source_uri="builtin://mnist",
+            validation_status="passed",
+        )
+        server.metadata_store.save_record(
+            "dataset-manifests",
+            "mnist@builtin-v1",
+            manifest.to_dict(),
+        )
+
+        result = await server._handle_tool(
+            "get_dataset_manifest",
+            {"dataset_id": "mnist", "version": "builtin-v1"},
+        )
+
+        assert result["manifest"]["dataset_id"] == "mnist"
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_validation_report_returns_report(
+        self, tmp_data_dir: Path
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        server.metadata_store.save_record(
+            "dataset-validation-reports",
+            "mnist@builtin-v1",
+            {
+                "report_id": "mnist@builtin-v1",
+                "dataset_id": "mnist",
+                "dataset_version": "builtin-v1",
+                "status": "passed",
+                "issues": [],
+                "stats": {"train_samples": 4},
+                "created_at": "2026-05-26T00:00:00+00:00",
+            },
+        )
+
+        result = await server._handle_tool(
+            "get_dataset_validation_report",
+            {"dataset_id": "mnist", "version": "builtin-v1"},
+        )
+
+        assert result["report"]["dataset_id"] == "mnist"
+        assert result["report"]["stats"]["train_samples"] == 4
+
+
 class TestCallToolResultShape:
     def test_call_tool_result_uses_structured_content(self, tmp_data_dir: Path) -> None:
         server, *_ = _make_server(tmp_data_dir)
@@ -431,6 +788,46 @@ class TestPydanticValidation:
         exc = self._validate("get_training_analysis", {})
         assert exc is not None
 
+    def test_get_run_requires_run_id(self) -> None:
+        exc = self._validate("get_run", {})
+        assert exc is not None
+
+    def test_compare_runs_requires_two_run_ids(self) -> None:
+        exc = self._validate("compare_runs", {"run_ids": ["run-1"]})
+        assert exc is not None
+
+    def test_register_model_requires_run_id(self) -> None:
+        exc = self._validate("register_model", {})
+        assert exc is not None
+
+    def test_promote_model_requires_registry_id(self) -> None:
+        exc = self._validate("promote_model", {"stage": "production"})
+        assert exc is not None
+
+    def test_reject_model_requires_reason(self) -> None:
+        exc = self._validate("reject_model", {"registry_id": "reg-1"})
+        assert exc is not None
+
+    def test_predict_online_requires_features(self) -> None:
+        exc = self._validate("predict_online", {"registry_id": "reg-1"})
+        assert exc is not None
+
+    def test_predict_batch_requires_inputs(self) -> None:
+        exc = self._validate("predict_batch", {"registry_id": "reg-1"})
+        assert exc is not None
+
+    def test_get_model_observability_requires_registry_id(self) -> None:
+        exc = self._validate("get_model_observability", {})
+        assert exc is not None
+
+    def test_get_drift_report_requires_registry_id(self) -> None:
+        exc = self._validate("get_drift_report", {})
+        assert exc is not None
+
+    def test_get_dataset_manifest_requires_dataset_id(self) -> None:
+        exc = self._validate("get_dataset_manifest", {})
+        assert exc is not None
+
     def test_update_training_task_requires_target(self) -> None:
         exc = self._validate("update_training_task", {"completed": True})
         assert exc is not None
@@ -445,6 +842,18 @@ class TestPydanticValidation:
 
     def test_list_models_accepts_empty_args(self) -> None:
         exc = self._validate("list_models", {})
+        assert exc is None
+
+    def test_list_runs_accepts_empty_args(self) -> None:
+        exc = self._validate("list_runs", {})
+        assert exc is None
+
+    def test_list_dataset_manifests_accepts_empty_args(self) -> None:
+        exc = self._validate("list_dataset_manifests", {})
+        assert exc is None
+
+    def test_list_registered_models_accepts_empty_args(self) -> None:
+        exc = self._validate("list_registered_models", {})
         assert exc is None
 
     def test_list_training_tasks_accepts_empty_args(self) -> None:

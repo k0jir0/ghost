@@ -5,9 +5,11 @@ from dataclasses import asdict
 import numpy as np
 import pytest
 
+from ghost.config import GhostConfig
 from ghost.context import BackendType, ContextManager
-from ghost.data_loading import DatasetBatchProvider, LoadedDataset
+from ghost.data_loading import DatasetBatchProvider, LoadedDataset, RealDatasetLoader
 from ghost.datasets import DatasetSpec
+from ghost.metadata_store import MetadataStore
 
 
 class FakeLoader:
@@ -58,3 +60,37 @@ def test_batch_provider_requires_dataset_metadata(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="resolved dataset"):
         provider.next_training_batch("m1", batch_size=2)
+
+
+def test_real_loader_persists_dataset_manifest_and_validation_report(tmp_path, monkeypatch) -> None:
+    config = GhostConfig(
+        model_cache_dir=tmp_path / "models",
+        data_cache_dir=tmp_path / "data",
+    )
+    config.ensure_directories()
+    loader = RealDatasetLoader(config=config)
+    dataset = LoadedDataset(
+        train_features=np.zeros((4, 28, 28, 1), dtype=np.float32),
+        train_labels=np.array([0, 1, 2, 3], dtype=np.int64),
+        eval_features=np.zeros((2, 28, 28, 1), dtype=np.float32),
+        eval_labels=np.array([0, 1], dtype=np.int64),
+    )
+    spec = DatasetSpec(
+        dataset_id="mnist",
+        task_type="image-classification",
+        source="builtin-catalog",
+        input_shape=(1, 28, 28),
+        num_classes=10,
+        synthetic=False,
+    )
+    monkeypatch.setattr(loader, "_load_mnist", lambda: dataset)
+
+    loaded = loader.load(spec)
+    store = MetadataStore(config.data_cache_dir / "metadata")
+    manifests = store.list_records("dataset-manifests")
+    reports = store.list_records("dataset-validation-reports")
+
+    assert loaded is dataset
+    assert manifests[0]["dataset_id"] == "mnist"
+    assert manifests[0]["validation_status"] == "passed"
+    assert reports[0]["dataset_id"] == "mnist"
