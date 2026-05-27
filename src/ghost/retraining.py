@@ -67,11 +67,14 @@ class RetrainingManager:
                 task_id=task_id,
             )
         elif existing_task.completed:
-            task = self.task_queue.update_task(
-                task_id=task_id,
-                text=task_text,
-                completed=False,
-            ) or existing_task
+            task = (
+                self.task_queue.update_task(
+                    task_id=task_id,
+                    text=task_text,
+                    completed=False,
+                )
+                or existing_task
+            )
         else:
             task = existing_task
 

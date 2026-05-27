@@ -341,7 +341,9 @@ class GhostMCPServer:
 
     async def _handle_get_run(self, arguments: dict[str, Any]) -> dict[str, Any]:
         experiment_run = self.run_store.get_run(arguments["run_id"])
-        orchestration_payload = self.metadata_store.load_record("runs", arguments["run_id"])
+        orchestration_payload = self.metadata_store.load_record(
+            "runs", arguments["run_id"]
+        )
 
         if experiment_run is None and orchestration_payload is None:
             return {"error": "Run not found"}
