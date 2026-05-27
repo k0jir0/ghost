@@ -134,3 +134,62 @@ def test_promote_model_archives_previous_production_version(tmp_path: Path) -> N
     assert "current-production" in promoted.aliases
     assert archived is not None
     assert archived.stage == "archived"
+
+
+def test_register_model_rejects_non_completed_run(tmp_path: Path) -> None:
+    registry, run_store = _make_registry(tmp_path)
+    run_store.upsert_run(
+        ExperimentRunRecord(
+            run_id="run-failed",
+            experiment_id="exp-failed",
+            model_id="model-failed",
+            status="failed",
+            backend="pytorch",
+            architecture="mlp",
+            metrics={"final_loss": 1.0},
+        )
+    )
+    run_store.upsert_artifact(
+        ArtifactRecord(
+            artifact_id="run-failed__checkpoint",
+            artifact_type="checkpoint",
+            uri=str(tmp_path / "models" / "model-failed.pt"),
+            run_id="run-failed",
+            model_id="model-failed",
+        )
+    )
+
+    with pytest.raises(ValueError, match="completed runs"):
+        registry.register_model("run-failed")
+
+
+def test_register_model_default_policy_fails_closed_without_metrics(
+    tmp_path: Path,
+) -> None:
+    registry, run_store = _make_registry(tmp_path)
+    run_store.upsert_run(
+        ExperimentRunRecord(
+            run_id="run-no-metrics",
+            experiment_id="exp-no-metrics",
+            model_id="model-no-metrics",
+            status="completed",
+            backend="pytorch",
+            architecture="mlp",
+            metrics={},
+        )
+    )
+    run_store.upsert_artifact(
+        ArtifactRecord(
+            artifact_id="run-no-metrics__checkpoint",
+            artifact_type="checkpoint",
+            uri=str(tmp_path / "models" / "model-no-metrics.pt"),
+            run_id="run-no-metrics",
+            model_id="model-no-metrics",
+        )
+    )
+
+    record = registry.register_model("run-no-metrics")
+
+    assert record.stage == "draft"
+    assert record.evaluation_status == "failed"
+    assert record.metadata["eligible_for_promotion"] is False

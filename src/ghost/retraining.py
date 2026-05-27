@@ -51,17 +51,37 @@ class RetrainingManager:
         if record is None:
             raise KeyError(f"Unknown registry id: {registry_id}")
 
-        task = self.task_queue.add_task(
-            f"Retrain {record.model_id} on {record.dataset_id or 'its dataset'}",
-            task_id=f"retrain-{registry_id}",
+        task_text = f"Retrain {record.model_id} on {record.dataset_id or 'its dataset'}"
+        task_id = f"retrain-{registry_id}"
+        existing_task = next(
+            (
+                task
+                for task in self.task_queue.list_tasks(include_completed=True)
+                if task.task_id == task_id
+            ),
+            None,
         )
-        task_id = task.task_id or f"retrain-{registry_id}"
+        if existing_task is None:
+            task = self.task_queue.add_task(
+                task_text,
+                task_id=task_id,
+            )
+        elif existing_task.completed:
+            task = self.task_queue.update_task(
+                task_id=task_id,
+                text=task_text,
+                completed=False,
+            ) or existing_task
+        else:
+            task = existing_task
+
+        resolved_task_id = task.task_id or task_id
         request = RetrainingRequest(
             request_id=f"{registry_id}__retrain",
             registry_id=registry_id,
             model_id=record.model_id,
             reason=reason,
-            task_id=task_id,
+            task_id=resolved_task_id,
         )
         self.metadata_store.save_record(
             "retraining-requests",

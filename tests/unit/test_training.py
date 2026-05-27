@@ -365,6 +365,68 @@ class TestTrainingPipelineLoop:
         assert result.success is True
         assert result.epochs_completed == 1
 
+    def test_stop_training_returns_cancelled_result(self, tmp_data_dir: Path) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        cm.create_context("stop_m", "StopModel", BackendType.PYTORCH)
+
+        pipeline = TrainingPipeline(context_manager=cm)
+        ops = MagicMock()
+
+        async def _stop_after_first_step(**_: Any) -> dict[str, Any]:
+            pipeline.stop_training("stop_m")
+            return _make_success_step(0.5)
+
+        ops.train_step = AsyncMock(side_effect=_stop_after_first_step)
+        ops.save_checkpoint = AsyncMock(return_value={"status": "success"})
+
+        cfg = TrainingConfig(
+            model_id="stop_m",
+            backend=BackendType.PYTORCH,
+            epochs=3,
+            steps_per_epoch=5,
+        )
+
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
+            result = self._run(pipeline, cfg)
+
+        ctx = cm.get_context("stop_m")
+
+        assert result.success is False
+        assert result.status == "cancelled"
+        assert result.cancelled is True
+        assert result.error == "Training cancelled by request."
+        assert ctx is not None
+        assert ctx.state == ModelState.CANCELLED
+
+    def test_pipeline_records_context_metrics_with_correct_epoch_labels(
+        self,
+        tmp_data_dir: Path,
+    ) -> None:
+        cm = ContextManager(storage_path=tmp_data_dir)
+        cm.create_context("epoch_m", "EpochModel", BackendType.PYTORCH)
+
+        pipeline = TrainingPipeline(context_manager=cm)
+        ops = _mock_ops([0.5] * 10)
+
+        cfg = TrainingConfig(
+            model_id="epoch_m",
+            backend=BackendType.PYTORCH,
+            epochs=2,
+            steps_per_epoch=2,
+        )
+
+        with patch("ghost.pytorch_ops.PyTorchOps", return_value=ops):
+            result = self._run(pipeline, cfg)
+
+        ctx = cm.get_context("epoch_m")
+
+        assert result.success is True
+        assert ctx is not None
+        assert [metric.epoch for metric in result.metrics_history] == [1, 1, 2, 2]
+        assert [metric.step for metric in result.metrics_history] == [1, 2, 3, 4]
+        assert [metric.epoch for metric in ctx.metrics] == [1, 1, 2, 2]
+        assert [metric.step for metric in ctx.metrics] == [1, 2, 3, 4]
+
 
 def test_pytorch_real_batch_helper_returns_input_target_and_spec(
     tmp_data_dir: Path,

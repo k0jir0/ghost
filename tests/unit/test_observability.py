@@ -154,6 +154,48 @@ def test_scheduler_queues_retraining_on_drift(tmp_path: Path) -> None:
     assert task_queue.list_tasks()[0].task_id == f"retrain-{registered.registry_id}"
 
 
+def test_retraining_manager_coalesces_duplicate_pending_tasks(tmp_path: Path) -> None:
+    config, metadata_store, run_store, registry, task_queue = _make_runtime(tmp_path)
+    retraining = RetrainingManager(
+        task_queue=task_queue,
+        model_registry=registry,
+        config=config,
+        metadata_store=metadata_store,
+    )
+
+    run_store.upsert_run(
+        ExperimentRunRecord(
+            run_id="run-dup",
+            experiment_id="exp-dup",
+            model_id="model-dup",
+            status="completed",
+            backend="pytorch",
+            architecture="mlp",
+            dataset_id="mnist",
+            dataset_version="builtin-v1",
+            metrics={"final_accuracy": 0.9, "final_loss": 0.2},
+        )
+    )
+    run_store.upsert_artifact(
+        ArtifactRecord(
+            artifact_id="run-dup__checkpoint",
+            artifact_type="checkpoint",
+            uri=str(tmp_path / "models" / "model-dup.pt"),
+            run_id="run-dup",
+            model_id="model-dup",
+        )
+    )
+    registered = registry.register_model("run-dup")
+
+    first = retraining.queue_retraining(registered.registry_id, reason="drift-1")
+    second = retraining.queue_retraining(registered.registry_id, reason="drift-2")
+    tasks = task_queue.list_tasks(include_completed=True)
+
+    assert len(tasks) == 1
+    assert tasks[0].task_id == f"retrain-{registered.registry_id}"
+    assert first.task_id == second.task_id == tasks[0].task_id
+
+
 def test_auth_and_environment_services(tmp_path: Path) -> None:
     config, metadata_store, *_ = _make_runtime(tmp_path)
     auth = AuthService(config=config, metadata_store=metadata_store)

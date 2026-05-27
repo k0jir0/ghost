@@ -53,6 +53,8 @@ class ModelRegistry:
         candidate = self.run_store.get_run(run_id)
         if candidate is None:
             raise KeyError(f"Unknown run id: {run_id}")
+        if candidate.status != "completed":
+            raise ValueError("Only completed runs can be registered")
 
         artifact = self.run_store.get_checkpoint_artifact_for_run(run_id)
         if artifact is None:

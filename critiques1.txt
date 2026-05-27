@@ -1,0 +1,349 @@
+Title: A Research-Style Critique of the Current Ghost System
+
+Abstract
+
+Ghost is an ambitious local-first ML platform that attempts to unify training, orchestration, MCP tooling, dataset governance, model registry behavior, inference, and post-deployment monitoring inside one Python repository. The codebase is far more disciplined than many prototypes: the test suite passes end to end when executed with a workspace-local temporary directory, static typing is clean under mypy, and linting is green. The important critique is therefore not that Ghost is "sloppy." The critique is that Ghost presently exhibits a recurrent pattern common in early systems work: it has the surface syntax of a platform, but many of its deeper invariants remain prototype-grade. Architecturally, several abstractions are nominal rather than strongly enforced. Functionally, a number of important semantics are incorrect even though the unit and integration tests pass.
+
+Method
+
+I evaluated the repository by reading the primary runtime modules, the architecture and unit tests, and by running:
+
+1. `python -m pytest tests --basetemp=.tmp_pytest -p no:cacheprovider`
+2. `ruff check src/ghost agents`
+3. `python -m mypy --ignore-missing-imports --strict src/ghost`
+
+Under that setup, Ghost passes 229/229 tests, passes Ruff, and passes mypy. The critique below therefore targets deeper systems properties: hidden coupling, semantic incompleteness, unsafe control-plane assumptions, and observed behavioral bugs that are not covered by the current test contracts.
+
+1. Architectural Critique
+
+1.1. The system is advertised as layered, but operationally it remains monolithic.
+
+The README claims a shared service layer that cleanly aligns the agent and MCP server. In practice, the primary composition root in `src/ghost/mcp_server.py:50-100` directly constructs almost every major subsystem itself: context management, both backends, task queue, metadata store, run store, registry, observability, drift detection, alerts, and inference. This is not a minor stylistic issue. It means Ghost's architecture is centered on eager concrete assembly rather than stable service boundaries.
+
+The same control flow is also duplicated in the autonomous agent. Both `agents/training_agent.py:237-329` and `src/ghost/orchestration.py:277-364` perform nearly the same sequence: create a plan, resolve a dataset, create a model, derive a training config, run training, and optionally request analysis. That duplication is a sign that the "application service" boundary is not yet the real locus of behavior. The orchestration layer exists, but the agent is not actually reduced to a thin client of it.
+
+1.2. Hidden global state weakens reproducibility and makes composition brittle.
+
+Ghost uses a module-level configuration singleton in `src/ghost/config.py:182-193`. Several important components ignore dependency injection and instead grab configuration implicitly via `get_config()`, including `src/ghost/pytorch_ops.py:98`, `src/ghost/tensorflow_ops.py:38`, `src/ghost/mcp_server.py:68`, and `agents/training_agent.py:65`. This creates hidden non-local dependencies: the behavior of a backend object is partly determined by ambient process state rather than by constructor parameters alone.
+
+The `ContextManager` also exposes shared runtime buckets as mutable process-wide dictionaries in `src/ghost/context.py`. That design is convenient, but it turns runtime state into aliasable shared memory without explicit ownership, concurrency semantics, or lifecycle control. Architecturally, Ghost has dependency injection at the surface and ambient mutable state underneath.
+
+1.3. The filesystem is being used as a database without database semantics.
+
+Ghost persists contexts, metadata, tasks, runs, registry records, observability events, alerts, evaluations, manifests, and workflow records as JSON files. The individual write paths are neat, but the control plane still has no locking, no transactions, no compare-and-swap semantics, and no multi-writer coordination. The core examples are:
+
+- `src/ghost/metadata_store.py:18-29`
+- `src/ghost/context.py:165-174`
+- `src/ghost/task_queue.py:120-228`
+
+This matters because Ghost is explicitly multi-actor: the MCP server, the training agent, retraining workflows, and any serving surface can all mutate shared state. A load-modify-write JSON loop is acceptable for a toy runtime, but not for a system that claims platform semantics. Lost updates, duplicate tasks, and cross-process races are not edge cases here; they are architectural consequences.
+
+1.4. The async surface is largely cosmetic.
+
+Ghost presents many core operations as async: planning, orchestration, training, backend train steps, serving, and MCP routing. However, many of the heavy operations executed inside these coroutines are still synchronous CPU work or blocking I/O. Examples include `torch` forward/backward passes in `src/ghost/pytorch_ops.py`, Keras `train_on_batch` in `src/ghost/tensorflow_ops.py`, `numpy.load` in `src/ghost/data_loading.py:178`, checkpoint saves in both backend files, and the Git subprocess call in `src/ghost/experiment_tracking.py`.
+
+The consequence is not merely theoretical. It breaks the expected semantics of cooperative concurrency: Ghost looks event-driven but often behaves like a single-threaded blocking loop. This shows up directly in cancellation behavior, discussed later.
+
+1.5. The system relies too heavily on untyped dictionaries at its semantic boundaries.
+
+Ghost uses many dataclasses, which is good. Yet once information crosses subsystem boundaries, strong types quickly dissolve into `dict[str, Any]`: recommendations, raw recommendations, metadata blobs, analysis payloads, observability summaries, alert payloads, workflow metadata, and registry metadata. This pattern appears throughout `src/ghost/schemas.py`, `src/ghost/orchestration.py`, `src/ghost/observability.py`, `src/ghost/drift.py`, and `src/ghost/model_registry.py`.
+
+From a programming-languages and software architecture perspective, that is a major loss of information. The code becomes type-checked locally but semantically weak globally. Invariants such as "this model was evaluated against this policy using these metrics on this dataset version" are represented only informally inside mutable dictionaries.
+
+1.6. Security and environment abstractions exist, but they are not integrated into the actual execution paths.
+
+`src/ghost/auth.py:32-70` defines an `AuthService`. `src/ghost/environment.py:23-38` defines an `EnvironmentManager`. A repository-wide search shows definitions, but no meaningful use sites in the serving or MCP paths. The serving surface in `src/ghost/serving.py` exposes prediction routes without any authentication hook at all. The environment abstraction simply returns directory layouts and is not propagated through the main services.
+
+Architecturally, these are vestigial abstractions. They improve the appearance of completeness more than the actual safety or deployability of the system.
+
+2. Functional Critique
+
+The strongest functional critique is not "the tests fail." They do not. The stronger claim is that several important behaviors are semantically wrong while still satisfying the present test suite.
+
+2.1. A failed run can be registered as promotion-eligible.
+
+`src/ghost/model_registry.py:45-90` never checks that the source run completed successfully before registration. It only requires that the run exist and have a checkpoint artifact. Meanwhile, `src/ghost/evaluation.py:15-70` uses a default policy with `min_accuracy=None` and `max_loss=None`. If there is no baseline and no explicit thresholds, a run with empty metrics can still "pass."
+
+I confirmed this behavior directly. Registering an `ExperimentRunRecord` with `status='failed'`, empty metrics, and a checkpoint artifact produced:
+
+`{'stage': 'draft', 'evaluation_status': 'passed', 'eligible': True}`
+
+That is a serious semantic error. A registry gate that can approve failed runs is not merely under-specified; it is functionally incorrect.
+
+2.2. Cancellation is reported as successful completion.
+
+The training loop in `src/ghost/training.py:218-220` logs `training_stopped_by_request` when a stop signal is observed. But if any metrics were recorded before the stop, the function later returns a successful `TrainingResult` at `src/ghost/training.py:391`. There is no distinct cancelled or interrupted terminal state.
+
+I reproduced this with an out-of-band timer. Ghost logged `stop_requested` and `training_stopped_by_request`, yet returned:
+
+`{'success': True, 'epochs_completed': 1, 'metrics': 5, 'error': None}`
+
+This is functionally wrong. A partially interrupted run should not be indistinguishable from a successfully completed run.
+
+2.3. Training metrics are tagged with the wrong epoch numbers.
+
+In `src/ghost/pytorch_ops.py:241`, each metric is recorded with `epoch=ctx.epochs_completed`. But `ctx.epochs_completed` is updated only after the training loop finishes an epoch in `src/ghost/training.py`. The result is a temporal off-by-one bug, and in short runs it can degenerate into all-zero epoch labels.
+
+I reproduced this with a two-epoch run and obtained:
+
+`{'result_epochs_completed': 2, 'metric_epochs': [0, 0, 0, 0], 'context_epochs_completed': 2}`
+
+Thus the persistent context says two epochs completed while every recorded metric says epoch zero. The training history is therefore semantically corrupted.
+
+The same design pattern appears in the TensorFlow backend as well.
+
+2.4. Failed predictions disappear from observability.
+
+`src/ghost/inference.py:40-75` records observability only after `_predict` returns successfully. If input preparation or inference raises an exception, no event is emitted. Consequently, the observability layer is blind to failed requests, and `error_rate` is biased downward.
+
+I reproduced this by forcing an input-shape mismatch. The prediction raised:
+
+`ValueError: Input shape (3,) does not match expected shape (1, 2, 2)`
+
+but the observability summary remained:
+
+`{'request_count': 0, 'error_count': 0, 'error_rate': 0.0, ...}`
+
+This is functionally wrong for any monitoring subsystem. A monitoring stack that ignores failures will systematically under-report unreliability.
+
+2.5. The drift detector is statistically unsound.
+
+`src/ghost/drift.py:80-98` takes the first successful event as a permanent baseline and compares it against the mean of the last up-to-ten events using only a scalar `input_mean`. This is not a robust drift detector. It collapses potentially high-dimensional input distributions into a single scalar and anchors the baseline to one early sample. Such a design will both miss real drift and create false alarms under multimodal or seasonal data.
+
+This is not just an "advanced future improvement." Drift detection is claimed as a production capability in the README. Under that claim, the present detector is functionally inadequate for the task it names.
+
+2.6. Retraining deduplication is broken.
+
+`src/ghost/retraining.py:49-58` always enqueues retraining using `task_id=f"retrain-{registry_id}"`. But `src/ghost/task_queue.py:120-166` does not enforce task-id uniqueness when adding JSON-backed tasks. Repeated retraining requests therefore append duplicate tasks with the same identifier.
+
+I confirmed this directly. Two calls to `queue_retraining` produced two queue entries with the same `task_id`:
+
+`retrain-model-x__v1`
+
+This violates a basic control-plane invariant. A task id should identify a task, not merely label potentially many indistinguishable copies.
+
+2.7. `list_runs` has unstable semantics and hides one class of runs when another exists.
+
+`src/ghost/mcp_server.py:311-324` first queries `RunStore` for experiment runs. If any exist, it returns only those. It falls back to orchestration-run records only when no experiment runs are found. Therefore the meaning of `list_runs` depends on storage population rather than on an explicit API contract.
+
+I reproduced this by storing one orchestration run and one experiment run. The tool returned only the experiment run and silently omitted the orchestration run.
+
+Functionally, that means clients cannot rely on `list_runs` as a stable inventory of "runs." They are really getting whichever run representation happened to win the server's priority order.
+
+2.8. Text support is more nominal than real.
+
+Ghost advertises IMDB review support, but the implementation is shallow:
+
+- `src/ghost/data_loading.py` pads token sequences and casts them to `float32`.
+- The available architectures are MLP or ResNet-like image models.
+- The observability path assumes dense numeric arrays and summarizes them using global mean and standard deviation.
+
+This is not a serious text-modeling pipeline. It is closer to "text-shaped numeric tensors can be pushed through generic machinery." The advertised multimodality therefore exceeds the semantic strength of the implementation.
+
+3. What This Means
+
+Ghost is not a bad codebase. On the contrary, it is a well-structured prototype with unusually good local discipline for a project at this stage. The core issue is that Ghost often mistakes representational completeness for systems completeness. The repository contains modules for planning, orchestration, datasets, registry, serving, auth, environment profiles, observability, drift, alerts, and retraining. But several of these abstractions are either weakly connected, weakly enforced, or semantically narrower than their names imply.
+
+From a PhD-level systems perspective, the repository's deepest problem is not code hygiene. It is that key global invariants are not yet first-class:
+
+- what counts as a valid completed run
+- what counts as a cancelled run
+- what constitutes a unique task
+- what must be recorded when inference fails
+- what concurrency model governs shared persistent state
+- what exact statistical object "drift" refers to
+
+Until those invariants are made explicit and mechanically enforced, Ghost should be understood as a promising research prototype rather than a principled ML platform.
+
+4. Bottom Line
+
+Architecturally wrong:
+
+- the system is still effectively monolithic despite nominal layers
+- shared global state and file-backed mutation weaken reproducibility and concurrency safety
+- async APIs mask blocking execution
+- several abstractions, especially auth and environment separation, are not integrated into the live system
+
+Functionally wrong:
+
+- failed runs can pass registry gates
+- cancelled runs are reported as successful
+- training history stores incorrect epoch labels
+- failed predictions are invisible to observability
+- retraining requests can duplicate task ids
+- `list_runs` changes meaning depending on what is stored
+- the drift detector is too weak to justify its production framing
+
+In short: Ghost currently passes its tests, but several of the things it says about the world are not yet true in a strong systems sense.
+
+5. Roadmap of Solutions
+
+The correct response to the present critique is not a wholesale rewrite. Ghost already has useful structure. The goal should be to convert weakly enforced intentions into explicit, testable, system-wide invariants. The roadmap below is therefore staged in increasing order of architectural disruption.
+
+5.1. Phase I: Repair Semantic Correctness First
+
+This phase should be completed before any major refactor. The reason is simple: architecture should not be stabilized around incorrect behavior.
+
+Priority 1: Make run-state semantics explicit and total.
+
+- Introduce an explicit terminal-state lattice for runs, e.g. `completed`, `failed`, `cancelled`, and `interrupted`.
+- Ensure `TrainingPipeline.train` returns `success=False` or a distinct cancellation status when `stop_training` is observed.
+- Propagate that state through orchestration, experiment tracking, run storage, and registry admission.
+- Add property-style tests asserting that a cancelled run can never be mistaken for a completed run.
+
+Priority 2: Harden registry admission.
+
+- Require `ExperimentRunRecord.status == "completed"` before `register_model` is allowed.
+- Require the presence of minimally sufficient metrics before evaluation can pass.
+- Change the default evaluation policy from permissive to fail-closed.
+- Add an invariant test stating that failed runs, runs without metrics, and runs without artifacts cannot become promotion-eligible.
+
+Priority 3: Repair training-history semantics.
+
+- Stop deriving metric epoch labels from stale context state inside backend `train_step`.
+- Pass the current epoch and step from the training loop into the backend or record metrics in the loop itself rather than in backend code.
+- Add tests that assert epoch labels are monotone, 1-indexed or 0-indexed consistently, and equal in count to the realized training steps.
+
+Priority 4: Record failed inference attempts.
+
+- Wrap `predict_online` and `predict_batch` so observability is updated on both success and failure paths.
+- Persist failure type, message class, and latency-to-failure.
+- Redefine observability summaries so `request_count = successes + failures`.
+- Add tests for shape errors, checkpoint-load errors, and backend exceptions.
+
+Priority 5: Enforce task identity.
+
+- Make `TaskQueueStore.add_task` reject duplicate `task_id` values for JSON-backed queues.
+- Decide whether retraining requests should deduplicate, coalesce, or version duplicate requests.
+- Add tests that formalize the chosen behavior.
+
+Priority 6: Make `list_runs` semantically stable.
+
+- Split orchestration-run and experiment-run retrieval into distinct API surfaces, or return a tagged union that explicitly includes both types.
+- Avoid hidden priority rules based on storage population.
+- Add contract tests specifying exactly what a "run" means at the MCP boundary.
+
+5.2. Phase II: Eliminate Hidden Coupling
+
+Once correctness bugs are fixed, the next priority is to remove architectural sources of future semantic drift.
+
+Priority 1: Replace ambient configuration with explicit composition.
+
+- Remove implicit `get_config()` calls from runtime-critical components such as backend ops, the MCP server, and the agent.
+- Thread `GhostConfig` through constructors consistently.
+- Reserve the global singleton only for CLI/bootstrap code if it must exist at all.
+- Add tests that instantiate multiple isolated configurations in one process without interference.
+
+Priority 2: Consolidate execution logic under a single application service.
+
+- Make `TrainingOrchestrator` the only owner of the plan -> dataset -> model -> train -> analyze pipeline.
+- Reduce `TrainingAgent` to queue management plus orchestrator invocation.
+- Remove duplicated planning and model-creation logic from the agent once orchestration is authoritative.
+- Add integration tests showing that agent-triggered and direct-orchestrator-triggered runs have identical semantics.
+
+Priority 3: Replace dictionary-shaped boundaries with typed records.
+
+- Introduce explicit schema types for recommendation payloads, training analysis, observability summaries, alert payloads, and workflow metadata.
+- Reduce dependence on `dict[str, Any]` for invariants that matter to correctness.
+- Use typed conversions at serialization boundaries rather than throughout the business logic.
+
+5.3. Phase III: Strengthen the Persistence Model
+
+At present, Ghost behaves like a single-user local control plane. If the project wants to preserve that simplicity, it should say so. If it wants platform semantics, persistence must be upgraded.
+
+Priority 1: Define the concurrency model.
+
+- State explicitly whether Ghost assumes a single writer, one writer per category, or concurrent writers.
+- Document that assumption in the README and enforce it in code.
+
+Priority 2: Introduce stronger storage semantics.
+
+- Short term: add file locks or atomic compare-and-swap patterns around queue and metadata mutation.
+- Medium term: migrate control-plane records to SQLite or another embedded transactional store.
+- Long term: abstract persistence behind interfaces so local JSON, SQLite, and external stores can coexist without changing business logic.
+
+Priority 3: Separate runtime state from durable state.
+
+- Keep in-memory model objects and optimizer state out of the same conceptual bucket as durable model/run metadata.
+- Formalize what must survive restart and what may be reconstructed.
+- Add recovery tests that simulate process death and ensure restart semantics remain correct.
+
+5.4. Phase IV: Make the Async Story True
+
+Ghost should either become genuinely asynchronous or stop advertising async semantics where they do not exist.
+
+Priority 1: Isolate blocking work.
+
+- Move heavy backend training/inference calls off the main event loop using threads, worker processes, or a job executor abstraction.
+- Treat checkpoint I/O, dataset loads, and subprocess calls as blocking work that must be isolated.
+
+Priority 2: Redesign cancellation around real preemption boundaries.
+
+- Check cancellation at safe points that are guaranteed to run promptly.
+- Distinguish user stop, resource abort, backend exception, and planner failure.
+- Add responsiveness tests that bound maximum stop latency.
+
+Priority 3: Clarify async contracts.
+
+- Any method declared `async` should either await real asynchronous work or serve as an orchestration wrapper over isolated blocking tasks.
+- Avoid the current hybrid model in which coroutines often perform long synchronous computation directly.
+
+5.5. Phase V: Upgrade the Statistical and ML Semantics
+
+This phase matters if Ghost intends to justify claims about production ML operations rather than merely local experimentation.
+
+Priority 1: Redesign drift detection.
+
+- Replace single-scalar `input_mean` drift with per-feature or embedding-based summaries appropriate to the modality.
+- Use rolling baselines, explicit windows, and confidence-aware thresholds.
+- Distinguish covariate drift, label drift when labels are available, and prediction-distribution shift.
+- Add synthetic drift benchmarks to validate both false-positive and false-negative behavior.
+
+Priority 2: Make text support first-class or narrow the claim.
+
+- If text is a supported modality, introduce text-native architectures, preprocessing contracts, and observability features.
+- If that investment is not planned soon, the README should narrow the present claim and frame IMDB support as experimental.
+
+Priority 3: Strengthen evaluation semantics.
+
+- Define mandatory metrics per task type.
+- Require task-aware evaluation policies rather than one generic threshold object.
+- Record metric provenance so promotions can be audited against exact datasets, baselines, and code versions.
+
+5.6. Phase VI: Integrate Security and Environment Isolation for Real
+
+Priority 1: Put auth on live surfaces.
+
+- Apply `AuthService` or its replacement to serving endpoints and any remote-capable MCP surface.
+- Define scope requirements per tool or route.
+- Record auth-related audit events in the same lineage system as registry actions.
+
+Priority 2: Make environment separation operational rather than declarative.
+
+- Route model, data, metadata, registry, and queue stores through environment-aware roots.
+- Ensure a deployment profile changes actual runtime behavior, not merely returned path objects.
+- Add tests that prove dev, staging, and production data do not bleed into each other.
+
+5.7. Recommended Execution Order
+
+If the team wants maximal impact for minimal disruption, the best order is:
+
+1. Fix registry admission, cancellation semantics, metric epoch labeling, failed-inference observability, duplicate retraining tasks, and `list_runs`.
+2. Collapse agent execution into the orchestrator and remove hidden config coupling.
+3. Introduce a stronger persistence layer and explicit concurrency model.
+4. Make the async execution model honest.
+5. Upgrade drift detection, text semantics, auth integration, and environment isolation.
+
+5.8. Expected End State
+
+If this roadmap is executed well, Ghost will change in an important qualitative way. It will stop being a repository that contains many platform-shaped modules and become a system whose global claims are actually enforced. The desired end state is:
+
+- a single authoritative execution path for training work
+- explicit and testable run-state semantics
+- fail-closed registry and serving boundaries
+- persistence with clear concurrency guarantees
+- observability that measures failures as well as successes
+- ML monitoring semantics that match the modalities being served
+- security and environment boundaries that are real runtime properties
+
+That is the path by which Ghost can evolve from a strong local prototype into a principled ML systems artifact.

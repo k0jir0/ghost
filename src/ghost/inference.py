@@ -44,7 +44,22 @@ class InferenceService:
     ) -> dict[str, Any]:
         started = perf_counter()
         record = await self._approved_record(registry_id)
-        predictions = await self._predict(record, [features])
+        try:
+            predictions = await self._predict(record, [features])
+        except Exception as exc:
+            self.observability.record_prediction(
+                registry_id,
+                record.model_id,
+                latency_ms=(perf_counter() - started) * 1000.0,
+                batch_size=1,
+                success=False,
+                inputs=[features],
+                predictions=[],
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
+
         self.observability.record_prediction(
             registry_id,
             record.model_id,
@@ -67,7 +82,22 @@ class InferenceService:
     ) -> dict[str, Any]:
         started = perf_counter()
         record = await self._approved_record(registry_id)
-        predictions = await self._predict(record, inputs)
+        try:
+            predictions = await self._predict(record, inputs)
+        except Exception as exc:
+            self.observability.record_prediction(
+                registry_id,
+                record.model_id,
+                latency_ms=(perf_counter() - started) * 1000.0,
+                batch_size=len(inputs),
+                success=False,
+                inputs=inputs,
+                predictions=[],
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            raise
+
         self.observability.record_prediction(
             registry_id,
             record.model_id,

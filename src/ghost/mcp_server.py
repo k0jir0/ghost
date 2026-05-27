@@ -309,47 +309,70 @@ class GhostMCPServer:
         }
 
     async def _handle_list_runs(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        experiment_runs = [run.to_dict() for run in self.run_store.list_runs()]
-        if experiment_runs:
-            return {
-                "runs": experiment_runs,
-                "count": len(experiment_runs),
-            }
+        experiment_runs = []
+        for run in self.run_store.list_runs():
+            payload = run.to_dict()
+            payload["run_type"] = "experiment"
+            experiment_runs.append(payload)
 
-        runs: list[dict[str, Any]] = []
+        orchestration_runs: list[dict[str, Any]] = []
         for payload in self.metadata_store.list_records("runs"):
             try:
-                runs.append(TrainingRunRecord.from_dict(payload).to_dict())
+                orchestration = TrainingRunRecord.from_dict(payload).to_dict()
+                orchestration["run_type"] = "orchestration"
+                orchestration_runs.append(orchestration)
             except Exception as exc:
                 logger.warning("run_record_load_failed", error=str(exc))
+
+        combined = sorted(
+            [*experiment_runs, *orchestration_runs],
+            key=lambda run: str(run.get("created_at", "")),
+        )
         return {
-            "runs": runs,
-            "count": len(runs),
+            "runs": combined,
+            "count": len(combined),
+            "experiment_runs": experiment_runs,
+            "orchestration_runs": orchestration_runs,
+            "counts": {
+                "experiment_runs": len(experiment_runs),
+                "orchestration_runs": len(orchestration_runs),
+            },
         }
 
     async def _handle_get_run(self, arguments: dict[str, Any]) -> dict[str, Any]:
         experiment_run = self.run_store.get_run(arguments["run_id"])
-        if experiment_run is not None:
-            return {
-                "run": experiment_run.to_dict(),
-            }
+        orchestration_payload = self.metadata_store.load_record("runs", arguments["run_id"])
 
-        payload = self.metadata_store.load_record("runs", arguments["run_id"])
-        if payload is None:
+        if experiment_run is None and orchestration_payload is None:
             return {"error": "Run not found"}
 
-        try:
-            record = TrainingRunRecord.from_dict(payload)
-        except Exception as exc:
-            logger.warning(
-                "run_record_load_failed",
-                run_id=arguments["run_id"],
-                error=str(exc),
-            )
-            return {"error": "Run record is corrupt or incompatible"}
+        orchestration_run: dict[str, Any] | None = None
+        if orchestration_payload is not None:
+            try:
+                orchestration_run = TrainingRunRecord.from_dict(
+                    orchestration_payload
+                ).to_dict()
+                orchestration_run["run_type"] = "orchestration"
+            except Exception as exc:
+                logger.warning(
+                    "run_record_load_failed",
+                    run_id=arguments["run_id"],
+                    error=str(exc),
+                )
+                return {"error": "Run record is corrupt or incompatible"}
+
+        if experiment_run is not None:
+            experiment_payload = experiment_run.to_dict()
+            experiment_payload["run_type"] = "experiment"
+            return {
+                "run": experiment_payload,
+                "experiment_run": experiment_payload,
+                "orchestration_run": orchestration_run,
+            }
 
         return {
-            "run": record.to_dict(),
+            "run": orchestration_run,
+            "orchestration_run": orchestration_run,
         }
 
     async def _handle_compare_runs(self, arguments: dict[str, Any]) -> dict[str, Any]:

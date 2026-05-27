@@ -19,6 +19,7 @@ class EvaluationPolicy:
     max_loss: float | None = None
     max_accuracy_drop: float = 0.05
     max_loss_increase: float = 0.5
+    require_final_loss: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,6 +50,12 @@ class ModelEvaluator:
         metrics = dict(candidate.metrics)
         final_accuracy = self._metric(metrics, "final_accuracy")
         final_loss = self._metric(metrics, "final_loss")
+
+        if not metrics:
+            issues.append("Candidate run did not record any metrics")
+
+        if policy.require_final_loss and final_loss is None:
+            issues.append("Candidate run is missing final_loss")
 
         if policy.min_accuracy is not None:
             if final_accuracy is None or final_accuracy < policy.min_accuracy:

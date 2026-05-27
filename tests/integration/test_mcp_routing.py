@@ -443,6 +443,58 @@ class TestRunMetadataTools:
         assert result["count"] == 2
         assert result["summary"]["best_accuracy_run_id"] == "run-2"
 
+    @pytest.mark.asyncio
+    async def test_list_runs_returns_both_experiment_and_orchestration_records(
+        self,
+        tmp_data_dir: Path,
+    ) -> None:
+        server, *_ = _make_server(tmp_data_dir)
+        server.metadata_store.save_record(
+            "runs",
+            "orch-1",
+            TrainingRunRecord(
+                run_id="orch-1",
+                model_id="model-orch",
+                status="completed",
+                plan=TrainingPlan(
+                    task="Train orchestration model",
+                    backend=BackendType.PYTORCH,
+                    architecture="mlp",
+                    num_classes=10,
+                    batch_size=32,
+                    learning_rate=0.001,
+                    epochs=1,
+                ),
+                analysis=None,
+                events=[],
+                request=TrainingRunRequest(
+                    task="Train orchestration model",
+                    model_id="model-orch",
+                ),
+            ).to_dict(),
+        )
+
+        run_store = RunStore(metadata_store=server.metadata_store)
+        run_store.upsert_run(
+            ExperimentRunRecord(
+                run_id="exp-1",
+                experiment_id="exp-1",
+                model_id="model-exp",
+                status="completed",
+                backend="pytorch",
+                architecture="mlp",
+                metrics={"final_accuracy": 0.9, "final_loss": 0.2},
+            )
+        )
+
+        result = await server._handle_tool("list_runs", {})
+
+        assert result["count"] == 2
+        assert result["counts"]["orchestration_runs"] == 1
+        assert result["counts"]["experiment_runs"] == 1
+        run_types = {run["run_type"] for run in result["runs"]}
+        assert run_types == {"orchestration", "experiment"}
+
 
 class TestModelRegistryTools:
     @pytest.mark.asyncio

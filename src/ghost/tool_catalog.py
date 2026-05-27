@@ -287,7 +287,7 @@ class ToolCatalog:
                 ),
                 ToolSpec(
                     name="list_runs",
-                    description="List persisted training orchestration runs",
+                    description="List persisted orchestration and experiment runs",
                     input_model=ListRunsArgs,
                     handler_name="_handle_list_runs",
                     tags=("runs", "orchestration", "listing"),

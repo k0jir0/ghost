@@ -153,6 +153,8 @@ def _training_result_to_dict(result: TrainingResult | None) -> dict[str, Any] | 
         "model_id": result.model_id,
         "success": result.success,
         "final_loss": result.final_loss,
+        "status": result.status,
+        "cancelled": result.cancelled,
         "final_accuracy": result.final_accuracy,
         "epochs_completed": result.epochs_completed,
         "checkpoint_path": (
@@ -187,6 +189,8 @@ def _training_result_from_dict(payload: Any) -> TrainingResult | None:
         model_id=str(payload["model_id"]),
         success=bool(payload["success"]),
         final_loss=float(payload["final_loss"]),
+        status=str(payload.get("status", "")),
+        cancelled=bool(payload.get("cancelled", False)),
         final_accuracy=(
             float(payload["final_accuracy"])
             if payload.get("final_accuracy") is not None
@@ -309,13 +313,22 @@ class TrainingOrchestrator:
             record.result = result
             record.analysis = await self._analyze_result(record, result)
 
-            if result.success:
+            if result.status == "completed":
                 await self._ensure_checkpoint_artifact(record, result)
                 record.status = "completed"
+                record.error = None
                 self._record_event(
                     record,
                     "training_completed",
                     epochs_completed=result.epochs_completed,
+                )
+            elif result.status == "cancelled":
+                record.status = "cancelled"
+                record.error = result.error
+                self._record_event(
+                    record,
+                    "training_cancelled",
+                    error=result.error or "Training cancelled",
                 )
             else:
                 record.status = "failed"
@@ -369,7 +382,7 @@ class TrainingOrchestrator:
             record.result = result
             record.analysis = await self._analyze_result(record, result)
 
-            if result.success:
+            if result.status == "completed":
                 await self._ensure_checkpoint_artifact(record, result)
                 record.status = "completed"
                 record.error = None
@@ -377,6 +390,14 @@ class TrainingOrchestrator:
                     record,
                     "resume_completed",
                     epochs_completed=result.epochs_completed,
+                )
+            elif result.status == "cancelled":
+                record.status = "cancelled"
+                record.error = result.error
+                self._record_event(
+                    record,
+                    "resume_cancelled",
+                    error=result.error or "Resumed training cancelled",
                 )
             else:
                 record.status = "failed"

@@ -59,6 +59,8 @@ class TrainingResult:
     model_id: str
     success: bool
     final_loss: float
+    status: str = ""
+    cancelled: bool = False
     final_accuracy: float | None = None
     epochs_completed: int = 0
     checkpoint_path: Path | None = None
@@ -70,6 +72,21 @@ class TrainingResult:
     data_mode: str = "unknown"
     used_synthetic_data: bool = False
     error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status:
+            normalized = self.status.lower()
+            self.status = normalized
+            self.cancelled = normalized == "cancelled"
+            self.success = normalized == "completed"
+            return
+
+        if self.cancelled:
+            self.status = "cancelled"
+            self.success = False
+            return
+
+        self.status = "completed" if self.success else "failed"
 
 
 class TrainingPipeline:
@@ -142,6 +159,7 @@ class TrainingPipeline:
             )
 
         ctx.update_state(ModelState.TRAINING)
+        ctx.metadata["pipeline_managed_training"] = True
         self.context_manager.update_context(ctx)
 
         stop_event = asyncio.Event()
@@ -163,7 +181,10 @@ class TrainingPipeline:
             duration = (_utc_now() - start_time).total_seconds()
             result.duration_seconds = duration
 
-            final_state = ModelState.READY if result.success else ModelState.FAILED
+            if result.status == "cancelled":
+                final_state = ModelState.CANCELLED
+            else:
+                final_state = ModelState.READY if result.success else ModelState.FAILED
             ctx.update_state(final_state)
             self.context_manager.update_context(ctx)
 
@@ -181,6 +202,10 @@ class TrainingPipeline:
             )
         finally:
             self._stop_events.pop(config.model_id, None)
+            cleanup_ctx = self.context_manager.get_context(config.model_id)
+            if cleanup_ctx is not None:
+                cleanup_ctx.metadata.pop("pipeline_managed_training", None)
+                self.context_manager.update_context(cleanup_ctx)
 
     async def _run_training_loop(
         self,
@@ -213,9 +238,11 @@ class TrainingPipeline:
         data_mode = "unknown"
         used_synthetic_data = False
         encountered_error: str | None = None
+        cancelled_by_request = False
 
         for epoch in range(config.epochs):
             if stop_event.is_set():
+                cancelled_by_request = True
                 logger.info(
                     "training_stopped_by_request",
                     model_id=config.model_id,
@@ -251,6 +278,7 @@ class TrainingPipeline:
 
             for step in range(config.steps_per_epoch):
                 if stop_event.is_set():
+                    cancelled_by_request = True
                     break
 
                 step_result = await ops.train_step(
@@ -274,6 +302,7 @@ class TrainingPipeline:
                     )
                     epoch_metrics.append(metric)
                     metrics_history.append(metric)
+                    self._record_metric(config.model_id, metric)
                 else:
                     encountered_error = str(
                         step_result.get("message", "Training step failed")
@@ -287,10 +316,16 @@ class TrainingPipeline:
                     )
                     break
 
-            if not epoch_metrics:
-                if stop_event.is_set():
-                    break
+            if stop_event.is_set():
+                cancelled_by_request = True
+                logger.info(
+                    "training_stopped_by_request",
+                    model_id=config.model_id,
+                    epoch=epoch + 1,
+                )
+                break
 
+            if not epoch_metrics:
                 if encountered_error is not None:
                     break
 
@@ -354,11 +389,31 @@ class TrainingPipeline:
         if metrics_history and metrics_history[-1].accuracy is not None:
             final_accuracy = metrics_history[-1].accuracy
 
+        if cancelled_by_request:
+            return TrainingResult(
+                model_id=config.model_id,
+                success=False,
+                final_loss=best_loss if best_loss != float("inf") else 0.0,
+                status="cancelled",
+                cancelled=True,
+                final_accuracy=final_accuracy,
+                epochs_completed=epochs_completed,
+                checkpoint_path=latest_checkpoint_path,
+                metrics_history=metrics_history,
+                effective_batch_size=current_batch_size,
+                health_status=health_status,
+                health_issues=health_issues,
+                data_mode=data_mode,
+                used_synthetic_data=used_synthetic_data,
+                error="Training cancelled by request.",
+            )
+
         if encountered_error is not None:
             return TrainingResult(
                 model_id=config.model_id,
                 success=False,
                 final_loss=best_loss if best_loss != float("inf") else 0.0,
+                status="failed",
                 final_accuracy=final_accuracy,
                 epochs_completed=epochs_completed,
                 checkpoint_path=latest_checkpoint_path,
@@ -376,6 +431,7 @@ class TrainingPipeline:
                 model_id=config.model_id,
                 success=False,
                 final_loss=0.0,
+                status="failed",
                 final_accuracy=None,
                 epochs_completed=0,
                 checkpoint_path=latest_checkpoint_path,
@@ -392,6 +448,7 @@ class TrainingPipeline:
             model_id=config.model_id,
             success=True,
             final_loss=best_loss if best_loss != float("inf") else 0.0,
+            status="completed",
             final_accuracy=final_accuracy,
             epochs_completed=epochs_completed,
             checkpoint_path=latest_checkpoint_path,
@@ -402,6 +459,14 @@ class TrainingPipeline:
             data_mode=data_mode,
             used_synthetic_data=used_synthetic_data,
         )
+
+    def _record_metric(self, model_id: str, metric: TrainingMetrics) -> None:
+        ctx = self.context_manager.get_context(model_id)
+        if ctx is None:
+            return
+
+        ctx.add_metric(metric)
+        self.context_manager.update_context(ctx)
 
     def stop_training(self, model_id: str) -> bool:
         """Signal a running training task to stop gracefully.

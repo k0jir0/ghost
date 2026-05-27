@@ -269,6 +269,53 @@ class TestTrainingOrchestrator:
         assert experiment_run.metrics["final_loss"] == pytest.approx(0.15)
 
     @pytest.mark.asyncio
+    async def test_execute_marks_cancelled_runs_explicitly(
+        self,
+        orchestration_runtime,
+    ) -> None:
+        orchestrator = orchestration_runtime["orchestrator"]
+        planner = orchestration_runtime["planner"]
+        training_pipeline = orchestration_runtime["training_pipeline"]
+        ollama_client = orchestration_runtime["ollama_client"]
+        pytorch_ops = orchestration_runtime["pytorch_ops"]
+
+        plan = _make_plan()
+        planner.create_plan = AsyncMock(return_value=plan)
+        pytorch_ops.create_model = AsyncMock(return_value={"status": "success"})
+        training_pipeline.train = AsyncMock(
+            return_value=TrainingResult(
+                model_id="model-cancelled",
+                success=False,
+                final_loss=0.2,
+                status="cancelled",
+                cancelled=True,
+                error="Training cancelled by request.",
+                metrics_history=[
+                    TrainingMetrics(
+                        epoch=1,
+                        step=1,
+                        loss=0.2,
+                        accuracy=0.8,
+                        learning_rate=0.001,
+                    )
+                ],
+            )
+        )
+        ollama_client.analyze_training_progress = AsyncMock(return_value=None)
+
+        record = await orchestrator.execute(
+            TrainingRunRequest(
+                task="Train MLP",
+                model_id="model-cancelled",
+            )
+        )
+
+        assert record.status == "cancelled"
+        assert record.result is not None
+        assert record.result.status == "cancelled"
+        assert any(event["stage"] == "training_cancelled" for event in record.events)
+
+    @pytest.mark.asyncio
     async def test_resume_works_after_orchestrator_restart(self, orchestration_runtime) -> None:
         orchestrator = orchestration_runtime["orchestrator"]
         planner = orchestration_runtime["planner"]

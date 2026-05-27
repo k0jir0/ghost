@@ -130,10 +130,14 @@ class TaskQueueStore:
 
         if self.path.suffix.lower() == ".md":
             tasks = self._load_markdown_tasks(self.path, include_completed=True)
+            resolved_task_id = task_id or self._generate_markdown_task_id(
+                clean_text, tasks
+            )
+            self._ensure_unique_markdown_task_id(resolved_task_id, tasks)
             task = QueueTask(
                 text=clean_text,
                 completed=False,
-                task_id=task_id or self._generate_markdown_task_id(clean_text, tasks),
+                task_id=resolved_task_id,
                 updated_at=_utc_now_iso(),
                 metadata=dict(metadata or {}),
             )
@@ -144,10 +148,12 @@ class TaskQueueStore:
         payload = self._load_json_payload_for_write()
         queue = payload.setdefault("queue", [])
         now = _utc_now_iso()
+        resolved_task_id = task_id or self._generate_json_task_id(clean_text, queue)
+        self._ensure_unique_json_task_id(resolved_task_id, queue)
         task = QueueTask(
             text=clean_text,
             completed=False,
-            task_id=task_id or self._generate_json_task_id(clean_text, queue),
+            task_id=resolved_task_id,
             created_at=now,
             updated_at=now,
             metadata=dict(metadata or {}),
@@ -464,3 +470,23 @@ class TaskQueueStore:
             candidate = f"{base}-{counter}"
             counter += 1
         return candidate
+
+    def _ensure_unique_json_task_id(
+        self,
+        task_id: str,
+        queue: list[Any],
+    ) -> None:
+        for item in queue:
+            if not isinstance(item, dict):
+                continue
+            if item.get("task_id") == task_id:
+                raise ValueError(f"Task id already exists: {task_id}")
+
+    def _ensure_unique_markdown_task_id(
+        self,
+        task_id: str,
+        tasks: list[QueueTask],
+    ) -> None:
+        for task in tasks:
+            if task.task_id == task_id:
+                raise ValueError(f"Task id already exists: {task_id}")

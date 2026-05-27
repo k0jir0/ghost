@@ -111,3 +111,70 @@ async def test_inference_service_predicts_from_promoted_model(tmp_path: Path) ->
     assert model is not None
     assert predictions[0]["predicted_class"] == 1
     assert len(predictions[0]["scores"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_inference_service_records_failed_prediction_attempts(
+    tmp_path: Path,
+) -> None:
+    reset_config()
+    config = GhostConfig(
+        model_cache_dir=tmp_path / "models",
+        data_cache_dir=tmp_path / "data",
+    )
+    config.ensure_directories()
+    metadata_store = MetadataStore(config.data_cache_dir / "metadata")
+    run_store = RunStore(config=config, metadata_store=metadata_store)
+    model_registry = ModelRegistry(
+        config=config,
+        metadata_store=metadata_store,
+        run_store=run_store,
+    )
+    context_manager = ContextManager(storage_path=tmp_path / "contexts")
+    fake_ops = _FakePyTorchOps()
+
+    run_store.upsert_run(
+        ExperimentRunRecord(
+            run_id="run-2",
+            experiment_id="exp-2",
+            model_id="model-2",
+            status="completed",
+            backend="pytorch",
+            architecture="mlp",
+            dataset_id="mnist",
+            dataset_version="builtin-v1",
+            input_shape=[1, 2, 2],
+            num_classes=2,
+            metrics={"final_accuracy": 0.95, "final_loss": 0.1},
+        )
+    )
+    run_store.upsert_artifact(
+        ArtifactRecord(
+            artifact_id="run-2__checkpoint",
+            artifact_type="checkpoint",
+            uri=str(tmp_path / "models" / "model-2.pt"),
+            run_id="run-2",
+            model_id="model-2",
+        )
+    )
+    record = model_registry.register_model("run-2")
+    model_registry.promote_model(record.registry_id, stage="production")
+
+    service = InferenceService(
+        config=config,
+        context_manager=context_manager,
+        model_registry=model_registry,
+        backend_ops={BackendType.PYTORCH: fake_ops},
+    )
+
+    with pytest.raises(ValueError, match="Input shape"):
+        await service.predict_online(record.registry_id, [1.0, 2.0, 3.0])
+
+    summary = service.observability.get_summary(record.registry_id)
+    events = service.observability.list_events(record.registry_id)
+
+    assert summary["request_count"] == 1
+    assert summary["error_count"] == 1
+    assert summary["error_rate"] == 1.0
+    assert len(events) == 1
+    assert events[0].error_type == "ValueError"

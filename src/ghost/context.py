@@ -25,6 +25,7 @@ class ModelState(Enum):
     TRAINING = "training"
     EVALUATING = "evaluating"
     CHECKPOINTED = "checkpointed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
     READY = "ready"
 

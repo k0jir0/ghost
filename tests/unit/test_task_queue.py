@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ghost.task_queue import TaskQueueStore
 
 
@@ -88,3 +90,11 @@ def test_update_task_changes_text(tmp_path: Path) -> None:
 
     assert updated is not None
     assert updated.text == "Train ResNet"
+
+
+def test_add_task_rejects_duplicate_task_id(tmp_path: Path) -> None:
+    store = TaskQueueStore(tmp_path / "TASKS.json")
+    store.add_task("Train MLP", task_id="duplicate")
+
+    with pytest.raises(ValueError, match="already exists"):
+        store.add_task("Train ResNet", task_id="duplicate")

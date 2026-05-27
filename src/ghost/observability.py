@@ -31,6 +31,8 @@ class PredictionEvent:
     predicted_classes: list[int] = field(default_factory=list)
     input_mean: float = 0.0
     input_std: float = 0.0
+    error_type: str | None = None
+    error_message: str | None = None
     created_at: str = field(default_factory=_utc_now_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,8 +66,10 @@ class ModelObservability:
         success: bool,
         inputs: list[Any],
         predictions: list[dict[str, Any]],
+        error_type: str | None = None,
+        error_message: str | None = None,
     ) -> PredictionEvent:
-        array = np.asarray(inputs, dtype=np.float32)
+        input_mean, input_std = self._input_summary(inputs)
         event = PredictionEvent(
             event_id=uuid4().hex,
             registry_id=registry_id,
@@ -79,8 +83,10 @@ class ModelObservability:
                 if isinstance(payload, dict)
                 and payload.get("predicted_class") is not None
             ],
-            input_mean=float(array.mean()) if array.size else 0.0,
-            input_std=float(array.std()) if array.size else 0.0,
+            input_mean=input_mean,
+            input_std=input_std,
+            error_type=error_type,
+            error_message=error_message,
         )
         self.metadata_store.save_record(
             "prediction-events",
@@ -134,3 +140,14 @@ class ModelObservability:
                 key = str(predicted_class)
                 counts[key] = counts.get(key, 0) + 1
         return counts
+
+    def _input_summary(self, inputs: list[Any]) -> tuple[float, float]:
+        try:
+            array = np.asarray(inputs, dtype=np.float32)
+        except Exception:
+            return 0.0, 0.0
+
+        if array.size == 0:
+            return 0.0, 0.0
+
+        return float(array.mean()), float(array.std())

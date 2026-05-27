@@ -200,9 +200,15 @@ class PyTorchOps:
 
             ctx = self.context_manager.get_context(model_id)
             data_mode = "synthetic"
+            step_number = 1
+            pipeline_managed = False
             if ctx:
                 if isinstance(ctx.metadata.get("dataset_spec"), dict):
                     data_mode = "real"
+                step_number = ctx.current_step + 1
+                pipeline_managed = bool(
+                    ctx.metadata.get("pipeline_managed_training", False)
+                )
                 ctx.metadata["data_mode"] = data_mode
                 ctx.update_state(ModelState.TRAINING)
                 self.context_manager.update_context(ctx)
@@ -237,21 +243,22 @@ class PyTorchOps:
             optimizer.step()
 
             if ctx:
-                metric = TrainingMetrics(
-                    epoch=ctx.epochs_completed,
-                    step=ctx.current_step + 1,
-                    loss=loss.item(),
-                    accuracy=accuracy,
-                    learning_rate=learning_rate,
-                )
-                ctx.add_metric(metric)
-                ctx.update_state(ModelState.READY)
-                self.context_manager.update_context(ctx)
+                if not pipeline_managed:
+                    metric = TrainingMetrics(
+                        epoch=ctx.epochs_completed + 1,
+                        step=step_number,
+                        loss=loss.item(),
+                        accuracy=accuracy,
+                        learning_rate=learning_rate,
+                    )
+                    ctx.add_metric(metric)
+                    ctx.update_state(ModelState.READY)
+                    self.context_manager.update_context(ctx)
 
             return {
                 "status": "success",
                 "model_id": model_id,
-                "step": ctx.current_step if ctx else 1,
+                "step": step_number,
                 "loss": loss.item(),
                 "accuracy": accuracy,
                 "data_mode": data_mode,
