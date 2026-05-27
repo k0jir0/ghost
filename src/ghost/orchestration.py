@@ -262,8 +262,8 @@ class TrainingOrchestrator:
         self._records = self._load_records()
         logger.info("training_orchestrator_init")
 
-    async def execute(self, request: TrainingRunRequest) -> TrainingRunRecord:
-        """Execute a planned training run end to end."""
+    def prepare_run(self, request: TrainingRunRequest) -> TrainingRunRecord:
+        """Create and persist a queued run record without executing it yet."""
         record = TrainingRunRecord(
             run_id=uuid4().hex,
             model_id=request.model_id or self._generate_model_id(),
@@ -275,8 +275,31 @@ class TrainingOrchestrator:
         )
         self._record_event(record, "request_received", task=request.task)
         self._persist(record)
+        return record
 
+    async def execute(self, request: TrainingRunRequest) -> TrainingRunRecord:
+        """Execute a planned training run end to end."""
+        record = self.prepare_run(request)
+        return await self.execute_prepared(record.run_id)
+
+    async def execute_prepared(self, run_id: str) -> TrainingRunRecord:
+        """Execute a previously prepared run record by id."""
+        record = self._records.get(run_id)
+        if record is None:
+            raise KeyError(f"Unknown run id: {run_id}")
+        if record.request is None:
+            raise ValueError(f"Run {run_id} does not contain a training request")
+        return await self._execute_record(record)
+
+    async def _execute_record(self, record: TrainingRunRecord) -> TrainingRunRecord:
+        """Execute a queued run record and persist lifecycle updates."""
         try:
+            request = record.request
+            if request is None:
+                raise ValueError(
+                    f"Run {record.run_id} does not contain a training request"
+                )
+
             dataset_spec = self._resolve_dataset(request, record)
             plan = await self.planner.create_plan(
                 PlanningRequest(

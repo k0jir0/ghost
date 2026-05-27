@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ghost Control Plane</title>
+    <link rel="stylesheet" href="/console-assets/styles.css" />
+    <script defer src="/console-assets/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <p class="eyebrow">McGillSoftware</p>
+          <h1>Ghost</h1>
+          <p class="brand-copy">
+            Local-first model operations, training orchestration, and registry
+            governance in one room.
+          </p>
+        </div>
+        <nav class="nav-stack">
+          <a href="/" data-link>Overview</a>
+          <a href="/runs" data-link>Runs</a>
+          <a href="/registry" data-link>Registry</a>
+          <a href="/tasks" data-link>Tasks</a>
+          <a href="/datasets" data-link>Datasets</a>
+          <a href="/playground" data-link>Playground</a>
+        </nav>
+        <div class="sidebar-card">
+          <p class="eyebrow">Live Status</p>
+          <div id="live-status" class="live-status">
+            <span class="status-dot"></span>
+            <span>Connecting to Ghost...</span>
+          </div>
+          <dl id="live-stats" class="mini-stats"></dl>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <p id="page-kicker" class="eyebrow">Control Plane</p>
+            <h2 id="page-title">Overview</h2>
+            <p id="page-subtitle" class="page-subtitle">
+              Browser console for Ghost training, registry, and serving
+              operations.
+            </p>
+          </div>
+          <div class="topbar-actions">
+            <button id="global-refresh" class="ghost-button ghost-button--quiet">
+              Refresh
+            </button>
+            <button id="global-run" class="ghost-button">Launch Run</button>
+          </div>
+        </header>
+
+        <section id="content" class="page-content">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Loading Ghost...</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="action-dialog" class="action-dialog">
+      <form method="dialog" class="dialog-shell">
+        <div class="dialog-head">
+          <div>
+            <p id="dialog-kicker" class="eyebrow">Action</p>
+            <h3 id="dialog-title">Ghost Action</h3>
+            <p id="dialog-copy" class="dialog-copy"></p>
+          </div>
+          <button id="dialog-close" class="icon-button" value="cancel">
+            Close
+          </button>
+        </div>
+        <div id="dialog-body" class="dialog-body"></div>
+        <div class="dialog-actions">
+          <button class="ghost-button ghost-button--quiet" value="cancel">
+            Cancel
+          </button>
+          <button id="dialog-submit" class="ghost-button" value="default">
+            Save
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
