@@ -53,6 +53,7 @@ dev = [
 [project.scripts]
 ghost = "ghost.mcp_server:main"
 ghost-agent = "agents.training_agent:main"
+ghost-cli = "ghost.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ghost"]

@@ -20,6 +20,7 @@ REM Parse command line arguments
 if "%1"=="agent" goto run_agent
 if "%1"=="server" goto run_server
 if "%1"=="daemon" goto run_daemon
+if "%1"=="cli" goto run_cli
 
 :run_server
 echo Starting MCP Server...
@@ -28,13 +29,18 @@ goto end
 
 :run_agent
 echo Starting Training Agent...
-python -m ghost.agents.training_agent
+python -m agents.training_agent
 goto end
 
 :run_daemon
 echo Starting Agent in daemon mode...
-start /min python -m ghost.agents.training_agent
+start /min python -m agents.training_agent
 echo Agent running in background
+goto end
+
+:run_cli
+echo Starting Ghost Operator CLI...
+python -m ghost.cli
 goto end
 
 :end

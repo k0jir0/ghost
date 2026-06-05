@@ -18,12 +18,16 @@ case "${1:-server}" in
         ;;
     agent)
         echo "Starting Training Agent..."
-        python -m ghost.agents.training_agent
+        python -m agents.training_agent
         ;;
     daemon)
         echo "Starting Agent in daemon mode..."
-        nohup python -m ghost.agents.training_agent > ghost.log 2>&1 &
+        nohup python -m agents.training_agent > ghost.log 2>&1 &
         echo "Agent running in background (PID: $!)"
+        ;;
+    cli)
+        echo "Starting Ghost Operator CLI..."
+        python -m ghost.cli
         ;;
     install)
         echo "Installing Ghost..."
@@ -31,12 +35,13 @@ case "${1:-server}" in
         echo "Ghost installed successfully!"
         ;;
     *)
-        echo "Usage: ./start.sh [server|agent|daemon|install]"
+        echo "Usage: ./start.sh [server|agent|daemon|cli|install]"
         echo ""
         echo "Commands:"
         echo "  server   - Start MCP server (default)"
         echo "  agent    - Start training agent"
         echo "  daemon   - Start agent in background"
+        echo "  cli      - Start numbered Ghost operator CLI"
         echo "  install  - Install Ghost package"
         exit 1
         ;;

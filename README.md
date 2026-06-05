@@ -135,6 +135,12 @@ cp .env.example .env   # PowerShell: Copy-Item .env.example .env
 ### Running
 
 ```bash
+# Start the numbered Ghost operator CLI (recommended)
+python -m ghost.cli
+
+# Or use the installed console script
+ghost-cli
+
 # Start the MCP server
 python -m ghost.mcp_server
 
@@ -147,7 +153,11 @@ python -m agents.training_agent
 # Or use the installed console script
 ghost-agent
 
-# Startup scripts remain available for the server flow
+# Startup scripts remain available
+./start.sh cli      # Linux/macOS
+./start.bat cli     # Windows
+
+# Direct startup script modes
 ./start.sh server   # Linux/macOS
 ./start.bat server  # Windows
 ```
@@ -161,6 +171,7 @@ ghost/
 │       ├── __init__.py           # Public package exports
 │       ├── config.py             # Pydantic-based configuration (GhostConfig)
 │       ├── context.py            # Model context & state management
+│       ├── cli.py                # Numbered operator control plane CLI
 │       ├── data_loading.py       # Real dataset loading and batch provisioning
 │       ├── datasets.py           # Dataset resolution and demo-mode policy
 │       ├── ingestion.py          # Filesystem and object-store dataset ingestion interfaces
