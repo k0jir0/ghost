@@ -9,7 +9,10 @@ __author__ = "McGill Software"
 from ghost.config import GhostConfig
 from ghost.context import ModelContext
 from ghost.datasets import DatasetResolver, DatasetSpec
+from ghost.deployment import DeploymentManager, DeploymentRecord
+from ghost.feature_store import FeatureDefinition, FeatureStore
 from ghost.health_monitor import HealthMonitor
+from ghost.metadata_store import MetadataStore, SQLiteMetadataBackend
 from ghost.orchestration import (
     TrainingOrchestrator,
     TrainingRunRecord,
@@ -22,9 +25,15 @@ from ghost.training import TrainingPipeline
 __all__ = [
     "DatasetResolver",
     "DatasetSpec",
+    "DeploymentManager",
+    "DeploymentRecord",
+    "FeatureDefinition",
+    "FeatureStore",
     "GhostConfig",
     "HealthMonitor",
+    "MetadataStore",
     "ModelContext",
+    "SQLiteMetadataBackend",
     "TrainingOrchestrator",
     "PlanningRequest",
     "TrainingPlan",

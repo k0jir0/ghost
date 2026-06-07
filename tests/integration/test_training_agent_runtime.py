@@ -12,7 +12,7 @@ from ghost.context import BackendType, ContextManager, ModelState
 
 
 class FakePyTorchOps:
-    instances: list["FakePyTorchOps"] = []
+    instances: list[FakePyTorchOps] = []
 
     def __init__(self, context_manager: ContextManager):
         self.context_manager = context_manager
@@ -66,7 +66,7 @@ class FakePyTorchOps:
 
 
 class FakeTensorFlowOps(FakePyTorchOps):
-    instances: list["FakeTensorFlowOps"] = []
+    instances: list[FakeTensorFlowOps] = []
 
     async def create_model(
         self,

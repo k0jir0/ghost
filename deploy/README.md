@@ -11,3 +11,5 @@ Operational expectations:
 - Keep data, model, and metadata roots isolated per environment.
 - Run health checks against the serving surface before promotion.
 - Preserve the previous production registry version so rollback is a registry-stage change, not a file recovery exercise.
+- Record release state through `ghost.deployment.DeploymentManager` so activations, deactivations, and rollbacks are auditable.
+- Connect `ghost.secrets.SecretResolver` to the target environment's vault or workload-identity provider before exposing production endpoints.

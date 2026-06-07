@@ -46,6 +46,43 @@ class DatasetIngestor(Protocol):
     ) -> IngestedDatasetArtifact: ...
 
 
+class ObjectStoreAdapter(Protocol):
+    """Protocol for staging object-store artifacts into local paths."""
+
+    def supports(self, source_uri: str) -> bool: ...
+
+    def fetch(self, source_uri: str, destination: Path) -> Path: ...
+
+
+class LocalMirrorObjectStoreAdapter:
+    """Fetch object-store URIs from a local mirror directory.
+
+    The mirror layout is ``<root>/<scheme>/<bucket>/<key>``. This gives tests,
+    demos, and air-gapped deployments a concrete object-store adapter without
+    adding cloud SDK dependencies to the core package.
+    """
+
+    def __init__(self, mirror_root: str | Path):
+        self.mirror_root = Path(mirror_root)
+
+    def supports(self, source_uri: str) -> bool:
+        return source_uri.startswith(("s3://", "minio://", "gs://"))
+
+    def fetch(self, source_uri: str, destination: Path) -> Path:
+        parsed = urlparse(source_uri)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(f"Invalid object-store URI: {source_uri}")
+
+        relative_key = Path(parsed.path.lstrip("/"))
+        source_path = self.mirror_root / parsed.scheme / parsed.netloc / relative_key
+        if not source_path.exists():
+            raise FileNotFoundError(f"Mirrored object not found: {source_path}")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, destination)
+        return destination
+
+
 class FilesystemDatasetIngestor:
     """Resolve file-backed dataset bundles without copying them."""
 
@@ -77,9 +114,11 @@ class ObjectStoreDatasetIngestor:
         self,
         config: GhostConfig | None = None,
         object_fetcher: Any | None = None,
+        object_adapters: list[ObjectStoreAdapter] | None = None,
     ):
         self.config = config or get_config()
         self.object_fetcher = object_fetcher
+        self.object_adapters = object_adapters or []
 
     def supports(self, source_uri: str) -> bool:
         return source_uri.startswith(("s3://", "minio://", "gs://"))
@@ -92,19 +131,7 @@ class ObjectStoreDatasetIngestor:
         destination = self._destination_path(spec, source_uri)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
-            if self.object_fetcher is None:
-                raise RuntimeError(
-                    "Object-store dataset ingestion requires an object_fetcher callback."
-                )
-
-            fetched = self.object_fetcher(source_uri, destination)
-            fetched_path = Path(fetched) if fetched is not None else destination
-            if (
-                fetched_path != destination
-                and fetched_path.exists()
-                and not destination.exists()
-            ):
-                shutil.copyfile(fetched_path, destination)
+            self._fetch_object(source_uri, destination)
 
         if not destination.exists():
             raise FileNotFoundError(
@@ -123,6 +150,26 @@ class ObjectStoreDatasetIngestor:
             / "ingested"
             / f"{safe_dataset}-{version}-{source_name}"
         )
+
+    def _fetch_object(self, source_uri: str, destination: Path) -> None:
+        for adapter in self.object_adapters:
+            if not adapter.supports(source_uri):
+                continue
+            fetched_path = adapter.fetch(source_uri, destination)
+            if fetched_path != destination and fetched_path.exists():
+                shutil.copyfile(fetched_path, destination)
+            return
+
+        if self.object_fetcher is None:
+            raise RuntimeError(
+                "Object-store dataset ingestion requires an object adapter "
+                "or object_fetcher callback."
+            )
+
+        fetched = self.object_fetcher(source_uri, destination)
+        fetched_path = Path(fetched) if fetched is not None else destination
+        if fetched_path != destination and fetched_path.exists():
+            shutil.copyfile(fetched_path, destination)
 
     def _version_for_spec(self, spec: DatasetSpec, source_uri: str) -> str:
         metadata = spec.metadata if isinstance(spec.metadata, dict) else {}

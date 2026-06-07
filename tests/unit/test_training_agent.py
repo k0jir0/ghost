@@ -10,8 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ghost.config import reset_config
-from ghost.context import BackendType, ContextManager
-
+from ghost.context import ContextManager
 
 # ---------------------------------------------------------------------------
 # Helpers — build a TrainingAgent with all heavy deps mocked
@@ -44,7 +43,6 @@ def _make_agent(tasks_file: Path, agent_memory: Path, tmp_path: Path) -> Any:
 
 class TestParseTasks:
     def test_returns_only_pending(self, tasks_file: Path, tmp_path: Path) -> None:
-        from agents.training_agent import TrainingAgent
 
         agent = _make_agent(tasks_file, tmp_path / "AGENT.md", tmp_path)
         tasks = agent.parse_tasks()

@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -131,7 +131,7 @@ def tmp_models_dir(tmp_path: Path) -> Path:
 @pytest.fixture()
 def ghost_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Return a fresh GhostConfig backed by a temp directory."""
-    from ghost.config import reset_config, GhostConfig
+    from ghost.config import GhostConfig, reset_config
 
     reset_config()
     monkeypatch.setenv("MODEL_CACHE_DIR", str(tmp_path / "models"))

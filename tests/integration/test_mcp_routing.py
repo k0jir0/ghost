@@ -17,7 +17,6 @@ from ghost.schemas import ArtifactRecord, DatasetManifest, ExperimentRunRecord
 from ghost.task_queue import TaskQueueStore
 from ghost.training import TrainingResult
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -756,8 +755,9 @@ class TestPydanticValidation:
     """Invalid arguments are rejected before reaching backend ops."""
 
     def _validate(self, tool_name: str, args: dict[str, Any]) -> Any:
-        from ghost.mcp_server import _TOOL_ARG_MODELS
         from pydantic import ValidationError
+
+        from ghost.mcp_server import _TOOL_ARG_MODELS
 
         model_cls = _TOOL_ARG_MODELS.get(tool_name)
         assert model_cls is not None, f"Unknown tool: {tool_name}"
