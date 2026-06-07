@@ -70,10 +70,10 @@ Ghost is a local-first ML training, evaluation, registry, and inference platform
 ## Current Boundaries
 
 - Ghost is **local-first and Ghost-native** today. The main loop is implemented inside the repository rather than backed by external managed infrastructure.
-- The auth and environment layers are **lightweight primitives**, not a full enterprise identity or secrets-management stack.
-- The serving layer is an **optional FastAPI surface**, not a full production deployment system with autoscaling, ingress, and hardened operations built in.
-- The object-store ingestion path is **pluggable**, but it still expects a real fetch adapter and external storage platform to become a complete production connector.
-- Ghost does **not** yet include a true feature store, distributed orchestration stack, or external durable metadata backend such as Postgres as part of the default implementation.
+- The auth and secret layers now expose scoped, expiring tokens plus pluggable secret providers; production deployments should still connect those protocols to their enterprise identity and vault systems.
+- The serving layer is an **optional FastAPI surface** with environment deployment records and rollback controls, not a managed autoscaling platform by itself.
+- The object-store ingestion path is **adapter-based**: Ghost includes a local mirror adapter and a protocol for S3/MinIO/GCS-style fetchers, while cloud SDK credentials and storage accounts remain deployment concerns.
+- Ghost now includes a lightweight feature registry/store and SQLite metadata backend, while distributed orchestration, warehouse-scale feature backfills, and Postgres/Object-store operations remain pluggable infrastructure choices.
 
 ## Recent Progress
 
@@ -81,6 +81,7 @@ Ghost is a local-first ML training, evaluation, registry, and inference platform
 - File-backed and object-store-backed dataset ingestion now feed external `.npz` dataset bundles through the same governed manifest and validation path as built-in datasets.
 - Models can now be evaluated, registered, promoted, rejected, and served from registry-managed versions.
 - Prediction traffic now records observability events, drift summaries, alerts, and drift-triggered retraining workflows.
+- Feature definitions, online feature values, point-in-time retrieval, SQLite metadata storage, object-store adapters, deployment activation/rollback, and secret-provider abstractions are now Ghost-native extension points.
 - The current regression baseline is the full green suite for the completed roadmap checkpoint.
 
 ## Quick Start

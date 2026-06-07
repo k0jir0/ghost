@@ -16,7 +16,7 @@ import pytest
 def _load_module(module_name: str) -> Any:
     try:
         return import_module(module_name)
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError:
         pytest.fail(
             f"Architecture contract missing: expected module '{module_name}'."
         )

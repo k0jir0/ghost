@@ -23,8 +23,10 @@ from ghost.config import get_config
 from ghost.context import BackendType, ContextManager
 from ghost.data_validation import DatasetValidator
 from ghost.dataset_registry import DatasetRegistry
+from ghost.deployment import DeploymentManager
 from ghost.drift import DriftDetector
 from ghost.evaluation import EvaluationPolicy
+from ghost.feature_store import FeatureDefinition, FeatureStore
 from ghost.health_monitor import HealthMonitor
 from ghost.inference import InferenceService
 from ghost.logging import get_logger
@@ -114,6 +116,15 @@ class GhostMCPServer:
         self.dataset_validator = dataset_validator or DatasetValidator(
             config=self.config,
             metadata_store=self.metadata_store,
+        )
+        self.feature_store = FeatureStore(
+            config=self.config,
+            metadata_store=self.metadata_store,
+        )
+        self.deployment_manager = DeploymentManager(
+            config=self.config,
+            metadata_store=self.metadata_store,
+            model_registry=self.model_registry,
         )
         self.tool_catalog = _DEFAULT_TOOL_CATALOG
 
@@ -499,6 +510,91 @@ class GhostMCPServer:
         if report is None:
             return {"error": "Dataset validation report not found"}
         return {"report": report.to_dict()}
+
+    async def _handle_register_feature_definition(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        definition = self.feature_store.register_definition(
+            FeatureDefinition(
+                feature_name=arguments["feature_name"],
+                version=arguments["version"],
+                value_type=arguments["value_type"],
+                entities=arguments.get("entities", []),
+                description=arguments.get("description", ""),
+                transformation=arguments.get("transformation", ""),
+                metadata=arguments.get("metadata", {}),
+            )
+        )
+        return {"feature": definition.to_dict()}
+
+    async def _handle_put_online_features(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        values = self.feature_store.put_online_features(
+            arguments["entity_id"],
+            arguments["values"],
+            event_timestamp=arguments.get("event_timestamp"),
+            metadata=arguments.get("metadata", {}),
+        )
+        return {
+            "features": [value.to_dict() for value in values],
+            "count": len(values),
+        }
+
+    async def _handle_get_online_features(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        values = self.feature_store.get_online_features(
+            arguments["entity_id"],
+            feature_names=arguments.get("feature_names"),
+            as_of=arguments.get("as_of"),
+        )
+        return {"features": values, "count": len(values)}
+
+    async def _handle_create_deployment(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        deployment = self.deployment_manager.create_deployment(
+            arguments["registry_id"],
+            environment=arguments["environment"],
+            actor=arguments.get("actor", "system"),
+            traffic_percent=arguments.get("traffic_percent", 100),
+            health_check_url=arguments.get("health_check_url", ""),
+            metadata=arguments.get("metadata", {}),
+        )
+        return {"deployment": deployment.to_dict()}
+
+    async def _handle_activate_deployment(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        deployment = self.deployment_manager.activate_deployment(
+            arguments["deployment_id"],
+            actor=arguments.get("actor", "system"),
+            health_status=arguments.get("health_status", "healthy"),
+        )
+        return {"deployment": deployment.to_dict()}
+
+    async def _handle_rollback_deployment(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        deployment = self.deployment_manager.rollback(
+            environment=arguments["environment"],
+            model_id=arguments["model_id"],
+            actor=arguments.get("actor", "system"),
+        )
+        return {"deployment": deployment.to_dict()}
+
+    async def _handle_list_deployments(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        deployments = self.deployment_manager.list_deployments(
+            environment=arguments.get("environment"),
+            model_id=arguments.get("model_id"),
+        )
+        return {
+            "deployments": [deployment.to_dict() for deployment in deployments],
+            "count": len(deployments),
+        }
 
     async def _handle_list_training_tasks(
         self, arguments: dict[str, Any]

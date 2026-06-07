@@ -7,13 +7,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from ghost.context import BackendType, ContextManager, ModelState
 from ghost.datasets import DatasetSpec
 from ghost.health_monitor import HealthIssue, ResourceSnapshot
 from ghost.training import TrainingConfig, TrainingPipeline, TrainingResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,7 +31,7 @@ def _mock_ops(losses: list[float] | None = None) -> MagicMock:
         losses = [0.5] * 20
 
     ops = MagicMock()
-    results = [_make_success_step(l) for l in losses]
+    results = [_make_success_step(loss) for loss in losses]
     ops.train_step = AsyncMock(side_effect=results + [{"status": "success", "loss": losses[-1]}] * 1000)
     ops.save_checkpoint = AsyncMock(return_value={"status": "success", "path": "/tmp/ckpt.pt"})
     return ops

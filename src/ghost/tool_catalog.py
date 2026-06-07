@@ -124,6 +124,55 @@ class GetDatasetValidationReportArgs(BaseModel):
     version: str = "builtin-v1"
 
 
+class RegisterFeatureDefinitionArgs(BaseModel):
+    feature_name: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    value_type: str = Field(min_length=1)
+    entities: list[str] = Field(default_factory=list)
+    description: str = ""
+    transformation: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PutOnlineFeaturesArgs(BaseModel):
+    entity_id: str = Field(min_length=1)
+    values: dict[str, Any] = Field(min_length=1)
+    event_timestamp: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GetOnlineFeaturesArgs(BaseModel):
+    entity_id: str = Field(min_length=1)
+    feature_names: list[str] | None = None
+    as_of: str | None = None
+
+
+class CreateDeploymentArgs(BaseModel):
+    registry_id: str = Field(min_length=1)
+    environment: str = Field(min_length=1)
+    actor: str = "system"
+    traffic_percent: int = Field(default=100, ge=1, le=100)
+    health_check_url: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActivateDeploymentArgs(BaseModel):
+    deployment_id: str = Field(min_length=1)
+    actor: str = "system"
+    health_status: str = "healthy"
+
+
+class RollbackDeploymentArgs(BaseModel):
+    environment: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    actor: str = "system"
+
+
+class ListDeploymentsArgs(BaseModel):
+    environment: str | None = None
+    model_id: str | None = None
+
+
 class ListModelsArgs(BaseModel):
     pass
 
@@ -382,6 +431,55 @@ class ToolCatalog:
                     input_model=GetDatasetValidationReportArgs,
                     handler_name="_handle_get_dataset_validation_report",
                     tags=("datasets", "validation"),
+                ),
+                ToolSpec(
+                    name="register_feature_definition",
+                    description="Register a reusable, versioned feature definition",
+                    input_model=RegisterFeatureDefinitionArgs,
+                    handler_name="_handle_register_feature_definition",
+                    tags=("features", "registry", "create"),
+                ),
+                ToolSpec(
+                    name="put_online_features",
+                    description="Store online feature values for an entity",
+                    input_model=PutOnlineFeaturesArgs,
+                    handler_name="_handle_put_online_features",
+                    tags=("features", "online", "write"),
+                ),
+                ToolSpec(
+                    name="get_online_features",
+                    description="Retrieve point-in-time online feature values for an entity",
+                    input_model=GetOnlineFeaturesArgs,
+                    handler_name="_handle_get_online_features",
+                    tags=("features", "online", "read"),
+                ),
+                ToolSpec(
+                    name="create_deployment",
+                    description="Create an environment deployment record for a registry model",
+                    input_model=CreateDeploymentArgs,
+                    handler_name="_handle_create_deployment",
+                    tags=("deployment", "release", "create"),
+                ),
+                ToolSpec(
+                    name="activate_deployment",
+                    description="Activate a healthy pending deployment",
+                    input_model=ActivateDeploymentArgs,
+                    handler_name="_handle_activate_deployment",
+                    tags=("deployment", "release", "activate"),
+                ),
+                ToolSpec(
+                    name="rollback_deployment",
+                    description="Roll an active environment deployment back to its previous model",
+                    input_model=RollbackDeploymentArgs,
+                    handler_name="_handle_rollback_deployment",
+                    tags=("deployment", "release", "rollback"),
+                ),
+                ToolSpec(
+                    name="list_deployments",
+                    description="List environment deployment records",
+                    input_model=ListDeploymentsArgs,
+                    handler_name="_handle_list_deployments",
+                    tags=("deployment", "release", "listing"),
                 ),
                 ToolSpec(
                     name="list_training_tasks",
