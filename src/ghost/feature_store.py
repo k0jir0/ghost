@@ -186,7 +186,9 @@ class FeatureStore:
         event_timestamp_key: str = "event_timestamp",
         metadata: dict[str, Any] | None = None,
     ) -> FeatureMaterializationRecord:
-        definitions = {definition.feature_name for definition in self.list_definitions()}
+        definitions = {
+            definition.feature_name for definition in self.list_definitions()
+        }
         feature_names: set[str] = set()
         entity_ids: set[str] = set()
         row_count = 0

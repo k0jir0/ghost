@@ -133,7 +133,9 @@ class DeploymentManager:
         if record is None:
             raise KeyError(f"Unknown deployment id: {deployment_id}")
         if health_status != "healthy":
-            raise ValueError("Deployment health check must be healthy before activation")
+            raise ValueError(
+                "Deployment health check must be healthy before activation"
+            )
 
         current = self.current_active(record.environment, record.model_id)
         if current is not None and current.deployment_id != record.deployment_id:
@@ -168,10 +170,13 @@ class DeploymentManager:
         if current is None:
             raise ValueError("No active deployment is available to roll back")
 
-        target_registry_id = current.previous_registry_id or self._latest_prior_registry(
-            environment,
-            model_id,
-            exclude_deployment_id=current.deployment_id,
+        target_registry_id = (
+            current.previous_registry_id
+            or self._latest_prior_registry(
+                environment,
+                model_id,
+                exclude_deployment_id=current.deployment_id,
+            )
         )
         if not target_registry_id:
             raise ValueError("No previous deployment is available for rollback")
